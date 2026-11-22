@@ -239,13 +239,16 @@ h1 span {
   margin-top: 28px;
   border: 1px dashed var(--line-strong);
   border-radius: 20px;
+  /* On a touch screen the overlay's canvas sits inside, clipped to the box. */
+  overflow: hidden;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
 }
 
-.pad span {
+/* The caption only: the overlay's labels are spans too, further in. */
+.pad > span {
   position: absolute;
   /* Top corner: the label of a match appears under the shape. */
   left: 16px;
@@ -255,7 +258,7 @@ h1 span {
   transition: opacity 200ms ease;
 }
 
-.pad[data-used] span {
+.pad[data-used] > span {
   opacity: 0;
 }
 
@@ -274,7 +277,9 @@ h1 span {
   stroke-width: 2.2;
 }
 
-.no-live .still {
+/* Also where nothing draws by itself, until the visitor's first stroke. */
+.no-live .still,
+.quiet:not([data-drawn]) .still {
   display: block;
 }
 
@@ -520,6 +525,20 @@ footer {
 
 #overlay {
   display: block;
+  /* The layout decides its size; the script only sets how many pixels it holds. */
+  width: 100%;
+  height: 100%;
+}
+
+/* Touch screens: the canvas and its labels live inside the pad and scroll with it. */
+.in-pad #overlay,
+.in-pad #labels {
+  position: absolute;
+  z-index: 0;
+}
+
+.in-pad #labels .chip {
+  position: absolute;
 }
 
 .no-live #overlay,

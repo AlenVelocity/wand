@@ -39,9 +39,10 @@ export class Overlay {
     labelRoot: HTMLElement,
     private monitor: Monitor,
     cfg: OverlayCfg,
+    lowLatency = true,
   ) {
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    this.renderer = new Renderer(canvas);
+    this.renderer = new Renderer(canvas, lowLatency);
     this.renderer.resize(monitor.w, monitor.h);
     this.labels = new Labels(labelRoot, reducedMotion);
     this.env = { cfg, scale: monitor.scale, height: monitor.h, reducedMotion };

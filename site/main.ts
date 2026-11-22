@@ -96,26 +96,41 @@ const readoutText = readout.querySelector('span') as HTMLElement;
 // Twice the CSS resolution is as sharp as a glow needs to be, and a 3x phone
 // has better uses for the other half of its fill rate.
 const dpr = Math.min(window.devicePixelRatio || 1, 2);
-const measure = (): Monitor => ({ x: 0, y: 0, w: Math.round(innerWidth * dpr), h: Math.round(innerHeight * dpr), scale: dpr, primary: true });
+
+// With a mouse, the overlay is a canvas fixed over the whole page. On a touch
+// screen it lives inside the pad instead: a small canvas in the flow of the
+// page. A transparent WebGL layer fixed over a scrolling page is the part
+// phone browsers get wrong, and a phone's viewport changes size every time
+// its address bar slides.
+const inPad = coarse;
+
+/** The canvas as it is laid out now, in the pixels the overlay draws in. */
+const measure = (): Monitor => {
+  const r = canvas.getBoundingClientRect();
+  return { x: 0, y: 0, w: Math.max(1, Math.round(r.width * dpr)), h: Math.max(1, Math.round(r.height * dpr)), scale: dpr, primary: true };
+};
+
+/** A point on screen, in the canvas's own pixels, wherever the canvas is. */
+const local = (clientX: number, clientY: number, r = canvas.getBoundingClientRect()): Pt => [(clientX - r.left) * dpr, (clientY - r.top) * dpr];
 
 function startOverlay(): Overlay | null {
-  // Without motion the trail would be a still picture of itself.
-  if (reducedMotion) return null;
   try {
     const style = document.createElement('style');
     style.textContent = LABEL_CSS;
     document.head.append(style);
-    const fit = () => {
-      canvas.style.width = `${innerWidth}px`;
-      canvas.style.height = `${innerHeight}px`;
-    };
-    fit();
-    const overlay = new Overlay(canvas, labels, measure(), DEFAULT_OVERLAY_CFG);
-    addEventListener('resize', () => {
-      fit();
-      overlay.setMonitor(measure());
+    if (inPad) {
+      pad.append(canvas, labels);
+      document.documentElement.classList.add('in-pad');
+    }
+    const overlay = new Overlay(canvas, labels, measure(), DEFAULT_OVERLAY_CFG, false);
+    // Fires when the canvas's box really changes, not on every scroll.
+    new ResizeObserver(() => overlay.setMonitor(measure())).observe(canvas);
+    // A phone takes the GPU away from a tab in the background. Carry on
+    // without the trail; reloading here could loop on a device short of memory.
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      document.documentElement.classList.add('no-live');
     });
-    canvas.addEventListener('webglcontextlost', () => location.reload());
     return overlay;
   } catch {
     return null;
@@ -135,6 +150,20 @@ function live(overlay: Overlay): void {
   let nextId = 1;
   let lastTouched = -Infinity;
   let drawing = false;
+
+  // The fixed canvas is pinned to the window, so a stroke on it would stay put
+  // while the page scrolled away underneath. While anything is drawn, the
+  // canvas rides with the page; once it is empty it snaps back over the window.
+  let anchor = scrollY;
+  const settle = () => {
+    if (inPad) return;
+    if (overlay.idle) anchor = scrollY;
+    const shift = `translate3d(0, ${anchor - scrollY}px, 0)`;
+    canvas.style.transform = shift;
+    labels.style.transform = shift;
+  };
+  if (!inPad) addEventListener('scroll', settle, { passive: true });
+  settle();
 
   const say = (text: string, kind: 'hint' | 'match' | 'miss') => {
     readoutText.textContent = text;
@@ -166,9 +195,11 @@ function live(overlay: Overlay): void {
       lastTouched = performance.now();
       id = nextId++;
       t0 = performance.now();
-      pts = [[e.clientX * dpr, e.clientY * dpr]];
+      settle();
+      pts = [local(e.clientX, e.clientY)];
       send({ k: 'down', id, t: t0, x: pts[0][0], y: pts[0][1], lead_ms: 4 });
       surface.dataset.used = '';
+      document.documentElement.dataset.drawn = '';
     });
 
     surface.addEventListener('pointermove', (e) => {
@@ -176,8 +207,9 @@ function live(overlay: Overlay): void {
       // Coalesced events give the full input rate instead of one per frame.
       const events = e.getCoalescedEvents?.() ?? [];
       const flat: number[] = [];
+      const box = canvas.getBoundingClientRect();
       for (const ev of events.length ? events : [e]) {
-        const p: Pt = [ev.clientX * dpr, ev.clientY * dpr];
+        const p = local(ev.clientX, ev.clientY, box);
         pts.push(p);
         flat.push(performance.now() - t0, p[0], p[1]);
       }
@@ -218,8 +250,8 @@ function live(overlay: Overlay): void {
 
   // A mouse or pen can use the whole hero. A finger gets the pad, so the rest
   // of the page still scrolls under it.
-  bind(hero, (e) => e.pointerType !== 'touch');
-  bind(pad, () => true);
+  if (inPad) bind(pad, () => true);
+  else bind(hero, (e) => e.pointerType !== 'touch');
 
   // --------------------------------------------- the page drawing by itself
 
@@ -232,7 +264,9 @@ function live(overlay: Overlay): void {
       return;
     }
     ghostBusy = true;
-    const take = perform(g.variants[0], cx * dpr, cy * dpr, size * dpr, 125, seed++);
+    settle();
+    const [x, y] = local(cx, cy);
+    const take = perform(g.variants[0], x, y, size * dpr, 125, seed++);
     const id = nextId++;
     const t0 = performance.now();
     let next = 1;
@@ -273,9 +307,20 @@ function live(overlay: Overlay): void {
     const g = button && BUILTINS.find((b) => b.id === button.dataset.id);
     if (!g) return;
     lastTouched = performance.now();
-    // Next to the list on a wide screen, over it on a narrow one.
-    const wide = innerWidth >= 920;
-    ghost(g, innerWidth * (wide ? 0.5 : 0.5), innerHeight * 0.5, Math.min(innerWidth * 0.5, innerHeight * 0.5, 400));
+    if (inPad) {
+      // The trail is up in the pad and the list is down here, so on a phone
+      // the row's own drawing plays again in place.
+      const path = button.querySelector('path') as SVGPathElement;
+      button.style.setProperty('--delay', '0ms');
+      path.style.transition = 'none';
+      path.style.strokeDashoffset = '1';
+      void path.getBoundingClientRect();
+      path.style.transition = '';
+      path.style.strokeDashoffset = '';
+      return;
+    }
+    // Large, over the middle of the window.
+    ghost(g, innerWidth * 0.5, innerHeight * 0.5, Math.min(innerWidth * 0.5, innerHeight * 0.5, 400));
   });
 
   // The one thing on the page that moves unasked: every few seconds the hero
@@ -289,6 +334,7 @@ function live(overlay: Overlay): void {
     // On a phone: most of the pad on screen. Otherwise: still at the top of the page.
     const shown = Math.min(r.bottom, innerHeight) - Math.max(r.top, 0);
     const inView = r.width > 0 ? shown >= r.height * 0.7 : scrollY < innerHeight * 0.3;
+    if (document.documentElement.classList.contains('no-live')) return;
     if (idle && inView && !document.hidden) {
       const g = BUILTINS.find((b) => b.id === tour[stop % tour.length]);
       stop++;
@@ -301,5 +347,8 @@ function live(overlay: Overlay): void {
     }
     if (!started) setTimeout(tick, 1000);
   };
-  setTimeout(tick, 700);
+  // Someone who has asked for less motion gets the trail for their own
+  // strokes, and nothing that moves by itself.
+  if (reducedMotion) document.documentElement.classList.add('quiet');
+  else setTimeout(tick, 700);
 }

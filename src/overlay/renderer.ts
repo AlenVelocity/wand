@@ -170,14 +170,23 @@ export class Renderer {
   private dirty = false;
   private drewThisFrame = false;
 
-  constructor(readonly canvas: HTMLCanvasElement) {
+  /**
+   * `lowLatency` asks the browser to present the canvas outside the page's
+   * normal compositing. The app wants that: one canvas, nothing under it but
+   * the desktop. On a web page with content beneath, phone browsers handle it
+   * badly (stale or torn frames), so the landing page turns it off.
+   */
+  constructor(
+    readonly canvas: HTMLCanvasElement,
+    lowLatency = true,
+  ) {
     const gl = canvas.getContext('webgl2', {
       alpha: true,
       premultipliedAlpha: true,
       antialias: false,
       depth: false,
       stencil: false,
-      desynchronized: true,
+      desynchronized: lowLatency,
       powerPreference: 'high-performance',
       preserveDrawingBuffer: false,
     });
