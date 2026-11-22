@@ -2,6 +2,7 @@
 name = "wand"
 version = "0.1.0"
 description = "Draw gestures in the air with a Joy-Con 2 to trigger actions on your PC"
+license = "MIT"
 edition = "2021"
 default-run = "wand"
 
