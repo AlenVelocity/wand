@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#000000" />
+    <title>Wand: draw in the air with a Joy-Con</title>
+    <meta name="description" content="Wand turns a Switch 2 Joy-Con into a wand for Windows. Hold ZR, draw a shape in the air, and a shortcut, media key or program runs." />
+    <link rel="canonical" href="https://wand.alen.is/" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://wand.alen.is/" />
+    <meta property="og:title" content="Wand: draw in the air with a Joy-Con" />
+    <meta property="og:description" content="Hold ZR on a Switch 2 Joy-Con, draw a shape in the air, and your Windows PC runs a shortcut." />
+    <meta property="og:image" content="https://wand.alen.is/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <header class="top wrap">
+      <a class="wordmark" href="/" aria-label="Wand, home">Wand<i></i></a>
+      <nav>
+        <a href="#gestures">Gestures</a>
+        <a href="#setup">Set up</a>
+        <a href="https://github.com/AlenVelocity/wand">GitHub</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero wrap" id="stage">
+        <div class="hero-copy">
+          <h1>Draw in the air<br />with a <span>Joy-Con.</span></h1>
+          <p class="lede">
+            Wand turns a Switch 2 Joy-Con into a wand for your Windows PC. Hold ZR, draw a shape, let go. A circle takes a screenshot, a flick skips the track,
+            a Z undoes.
+          </p>
+          <div class="cta">
+            <a class="button" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download for Windows</a>
+            <span class="meta">__VERSION__ · 3.1 MB · Windows 11</span>
+          </div>
+        </div>
+
+        <div class="pad" id="pad"><span>Draw here</span></div>
+
+        <!-- Shown only where the live trail cannot run: no WebGL2, or reduced motion. -->
+        <svg class="still" viewBox="0 0 200 200" aria-hidden="true">
+          <circle cx="100" cy="100" r="70" />
+        </svg>
+
+        <p class="readout" id="readout" aria-live="polite">
+          <i></i><span>Press and drag anywhere up here to draw. Start with a circle.</span>
+        </p>
+      </section>
+
+      <section class="gestures wrap" id="gestures">
+        <div class="section-head">
+          <h2>Fourteen shapes to start with</h2>
+          <p>
+            Each one can be rebound, switched off, or drawn again in your own hand. To add a new one, draw it three times and say what it should do. Pick a
+            row to watch it drawn.
+          </p>
+        </div>
+        <ul class="shapes" id="shapes"></ul>
+        <noscript><p class="note">The list of gestures is in the README on GitHub.</p></noscript>
+      </section>
+
+      <section class="made wrap" id="made">
+        <h2>What it is made of</h2>
+        <dl>
+          <div>
+            <dt>Link</dt>
+            <dd>Bluetooth LE, using the Joy-Con 2's own pairing. No dongle, and nothing to pair in Windows.</dd>
+          </div>
+          <div>
+            <dt>Motion</dt>
+            <dd>Gyro, accelerometer and magnetometer, fused into one orientation about 68 times a second.</dd>
+          </div>
+          <div>
+            <dt>Overlay</dt>
+            <dd>
+              A click-through window on every monitor, drawn at the display's refresh rate: 240 fps on a 240 Hz panel. Nothing is on screen until you hold
+              the trigger. The trail on this page is the same renderer, running in your browser.
+            </dd>
+          </div>
+          <div>
+            <dt>Matching</dt>
+            <dd>Template matching tuned on a few hundred strokes from a real hand. An oval still counts as a circle, and a tick still counts as a V.</dd>
+          </div>
+          <div>
+            <dt>Actions</dt>
+            <dd>Key combinations, media keys, programs and shell commands. The action runs the moment you let go; the animation follows.</dd>
+          </div>
+          <div>
+            <dt>Settings</dt>
+            <dd>One commented text file holds every threshold. Save it and the running app reloads it.</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="setup wrap" id="setup">
+        <h2>Set it up</h2>
+        <ol>
+          <li>
+            <h3>Run the installer</h3>
+            <p>It is not code-signed, so Windows SmartScreen will stop it. Choose More info, then Run anyway.</p>
+          </li>
+          <li>
+            <h3>Hold the sync button</h3>
+            <p>The small round one on the Joy-Con's rail, until the lights chase. Do not pair it in Windows settings; Wand does the pairing.</p>
+          </li>
+          <li>
+            <h3>Hold ZR and draw</h3>
+            <p>The trail follows your hand on whichever monitor you point at.</p>
+          </li>
+        </ol>
+        <div class="needs">
+          <p><b>You need</b> a Switch 2 Joy-Con, Windows 11 and Bluetooth.</p>
+          <p>
+            <b>Tested with</b> one right-hand Joy-Con 2. The left one and the Pro Controller 2 are handled in the code and have not been tried. A Joy-Con
+            paired with Wand stops reconnecting to the console until you pair it there again.
+          </p>
+          <p class="links">
+            <a class="button" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download __VERSION__</a>
+            <a href="https://github.com/AlenVelocity/wand">Source and README</a>
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>Wand is an independent project and is not affiliated with Nintendo. Joy-Con and Nintendo Switch are trademarks of Nintendo.</p>
+    </footer>
+
+    <canvas id="overlay" aria-hidden="true"></canvas>
+    <div id="labels" aria-hidden="true"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

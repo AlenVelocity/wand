@@ -12,28 +12,17 @@
 // wand), size=560, x=, y= (centre, CSS px), result=match|nomatch|captured,
 // mag=3 (magnify stroke widths to inspect joins).
 
+import { BUILTINS } from '../shared/gestures';
 import type { Monitor, OverlayCfg, OverlayMsg, StrokeResult } from '../shared/types';
 import { hash, noise1 } from './path';
 import type { Overlay } from './overlay';
 
 type P = [number, number];
 
-const circle = (dir: number): P[] =>
-  Array.from({ length: 73 }, (_, i) => {
-    const a = -Math.PI / 2 + (dir * i * Math.PI * 2) / 72;
-    return [Math.cos(a) * 0.5, Math.sin(a) * 0.5];
-  });
-
-export const SHAPES: Record<string, { points: P[]; label: string; icon: string }> = {
-  circle: { points: circle(1), label: 'Screenshot', icon: 'camera' },
-  slash: { points: [[0.38, -0.5], [-0.38, 0.5]], label: 'Close window', icon: 'close' },
-  z: { points: [[-0.5, -0.4], [0.5, -0.4], [-0.5, 0.4], [0.5, 0.4]], label: 'Undo', icon: 'undo' },
-  v: { points: [[-0.42, -0.5], [0, 0.5], [0.42, -0.5]], label: 'Paste', icon: 'paste' },
-  'flick-up': { points: [[0, 0.5], [0, -0.5]], label: 'Volume up', icon: 'volume-up' },
-  'flick-down': { points: [[0, -0.5], [0, 0.5]], label: 'Volume down', icon: 'volume-down' },
-  'flick-left': { points: [[0.5, 0], [-0.5, 0]], label: 'Previous track', icon: 'prev' },
-  'flick-right': { points: [[-0.5, 0], [0.5, 0]], label: 'Next track', icon: 'next' },
-};
+/** Every built-in gesture by id, drawn the first way it can be drawn. */
+export const SHAPES: Record<string, { points: P[]; label: string; icon: string }> = Object.fromEntries(
+  BUILTINS.map((b) => [b.id, { points: b.variants[0], label: b.label, icon: b.icon }]),
+);
 
 function lengthOf(p: P[]): number {
   let l = 0;
@@ -67,7 +56,7 @@ function resample(p: P[], n: number): P[] {
 
 const minJerk = (t: number) => t * t * t * (10 - 15 * t + 6 * t * t);
 
-interface Take {
+export interface Take {
   /** [ms since press, x, y] in device pixels. */
   samples: [number, number, number][];
   duration: number;
@@ -76,7 +65,7 @@ interface Take {
 }
 
 /** A plausibly human drawing of `shape`: tilted, wobbly, slow at the corners. */
-function perform(shape: P[], cx: number, cy: number, size: number, hz: number, seed: number): Take {
+export function perform(shape: P[], cx: number, cy: number, size: number, hz: number, seed: number): Take {
   const tilt = (hash(seed) - 0.5) * 0.2;
   const squash = 0.9 + hash(seed + 1) * 0.2;
   const [cs, sn] = [Math.cos(tilt), Math.sin(tilt)];

@@ -2,6 +2,7 @@
   "name": "wand",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "tauri": "tauri",
     "app": "tauri dev",
-    "bundle": "tauri build"
+    "bundle": "tauri build",
+    "site": "vite --config vite.site.config.ts",
+    "site:build": "tsc --noEmit && vite build --config vite.site.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "^5.3.0",

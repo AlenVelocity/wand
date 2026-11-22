@@ -98,6 +98,12 @@ Run the tool with `cargo run --manifest-path src-tauri/Cargo.toml --bin wandtool
 
 On the controller tested, the timestamp in the input report does not count microseconds, so sample timing comes from when reports arrive.
 
+## The landing page
+
+`site/` is the page served at [wand.alen.is](https://wand.alen.is). `pnpm site` runs it locally and `pnpm site:build` writes a static folder to `site/dist`, which is all a host needs (build command `pnpm site:build`, output directory `site/dist`).
+
+The trail on the page is the overlay code from `src/overlay`, and strokes drawn there are matched by `site/recognizer.ts`, a TypeScript port of `recognizer.rs`. The shapes the web side uses are in `src/shared/gestures.ts`, a mirror of `defaults()` in `gestures.rs`. Change one, change the other. Opening `/og.html` on the dev server redraws the link-preview image, `site/public/og.png`.
+
 ## Limits
 
 - Windows only, one controller at a time.
@@ -108,3 +114,7 @@ On the controller tested, the timestamp in the input report does not count micro
 ## Sources
 
 The Joy-Con 2 protocol comes from [ndeadly/switch2_controller_research](https://github.com/ndeadly/switch2_controller_research), [Nadeflore/switch2-controllers](https://github.com/Nadeflore/switch2-controllers) and [CareyScott/switch2controllerpc](https://github.com/CareyScott/switch2controllerpc).
+
+## Licence
+
+MIT. See [LICENSE](LICENSE).

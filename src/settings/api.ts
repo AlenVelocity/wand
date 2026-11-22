@@ -5,7 +5,7 @@
 // instead, so every page can be seen and clicked through without the app.
 
 import type { Action, DeviceStatus, Gesture, Library, Mode, Outcome, Pose, Pt, RecordingCheck, RecordingInfo, Snapshot } from '../shared/types';
-import { SHAPES } from '../overlay/demo';
+import { BUILTINS } from '../shared/gestures';
 
 export const inApp = '__TAURI_INTERNALS__' in window;
 
@@ -72,34 +72,22 @@ async function tauriBackend(): Promise<Backend> {
 
 // ---------------------------------------------------------------- browser stand-in
 
-function normalized(points: [number, number][]): Pt[] {
-  return points.map(([x, y]) => [x, y]);
-}
-
 function mockLibrary(): Library {
-  const g = (id: string, name: string, action: Action, rotation: 'bounded' | 'free' = 'bounded'): Gesture => ({
-    id,
-    name,
-    enabled: true,
-    rotation,
-    action,
-    label: SHAPES[id].label,
-    icon: SHAPES[id].icon,
-    variants: [{ ideal: normalized(SHAPES[id].points), samples: [] }],
-    builtin: true,
-  });
   return {
-    version: 1,
-    gestures: [
-      g('circle', 'Circle', { type: 'key_combo', keys: 'Win+PrintScreen' }, 'free'),
-      g('slash', 'Slash', { type: 'key_combo', keys: 'Alt+F4' }),
-      g('z', 'Z', { type: 'key_combo', keys: 'Ctrl+Z' }),
-      g('v', 'V', { type: 'key_combo', keys: 'Ctrl+V' }),
-      g('flick-up', 'Flick up', { type: 'media_key', key: 'volume_up', repeat: 3 }),
-      g('flick-down', 'Flick down', { type: 'media_key', key: 'volume_down', repeat: 3 }),
-      g('flick-left', 'Flick left', { type: 'media_key', key: 'prev_track', repeat: 1 }),
-      g('flick-right', 'Flick right', { type: 'media_key', key: 'next_track', repeat: 1 }),
-    ],
+    version: 3,
+    gestures: BUILTINS.map(
+      (b): Gesture => ({
+        id: b.id,
+        name: b.name,
+        enabled: true,
+        rotation: b.free ? 'free' : 'bounded',
+        action: b.action,
+        label: b.label,
+        icon: b.icon,
+        variants: b.variants.map((ideal) => ({ ideal, samples: [] })),
+        builtin: true,
+      }),
+    ),
   };
 }
 

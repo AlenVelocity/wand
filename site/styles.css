@@ -1,0 +1,606 @@
+/*
+  Wand, the landing page.
+
+  Same material as the app: a stroke of light drawn by hand on true black,
+  off-white ink for everything you read, one accent (coral, the ember) for the
+  strokes and the one thing to do. The trail is the only thing that glows, and
+  it draws over the page the way the real overlay draws over a desktop.
+  Grouped with space and hairlines. No panels, blur, gradients or second accent.
+*/
+
+:root {
+  --black: #000;
+  --ink: #f4f3f0;
+  --ink-muted: #a8a49c;
+  --ink-faint: #76726b;
+  --line: #201f1d;
+  --line-strong: #3b3835;
+  --lift: #0c0b0a;
+  --coral: #ff5757;
+  --coral-press: #e84a4a;
+
+  --font: 'DM Sans Variable', 'DM Sans', system-ui, sans-serif;
+  --mono: 'DM Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --gutter: clamp(20px, 5vw, 56px);
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--black);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  scroll-padding-top: 24px;
+}
+
+body {
+  margin: 0;
+  background: var(--black);
+  color: var(--ink);
+  font: 400 17px/1.55 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3,
+p,
+ul,
+ol,
+dl,
+dd {
+  margin: 0;
+  padding: 0;
+}
+
+::selection {
+  background: var(--coral);
+  color: var(--black);
+}
+
+a {
+  color: inherit;
+  text-decoration-color: var(--line-strong);
+  text-underline-offset: 0.22em;
+  touch-action: manipulation;
+}
+
+:focus-visible {
+  outline: 2px solid var(--coral);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+
+.wrap {
+  --pad-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  --pad-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+  position: relative;
+  max-width: 1160px;
+  margin-inline: auto;
+  padding-inline: var(--pad-left) var(--pad-right);
+}
+
+h2 {
+  font-size: clamp(28px, 3.6vw, 44px);
+  font-weight: 800;
+  line-height: 1.08;
+  letter-spacing: -0.025em;
+}
+
+/* ------------------------------------------------------------------ header */
+
+.top {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 76px;
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.wordmark {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-decoration: none;
+}
+
+.wordmark i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--coral);
+}
+
+nav {
+  display: flex;
+  gap: clamp(16px, 3vw, 30px);
+  font-size: 15px;
+  color: var(--ink-muted);
+}
+
+nav a {
+  padding: 12px 0;
+  text-decoration: none;
+  transition: color 160ms ease;
+}
+
+/* -------------------------------------------------------------------- hero */
+
+.hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  min-height: 100svh;
+  padding-top: 108px;
+  padding-bottom: clamp(28px, 6vh, 64px);
+}
+
+h1 {
+  font-size: clamp(46px, 7.4vw, 96px);
+  font-weight: 800;
+  line-height: 0.96;
+  letter-spacing: -0.04em;
+}
+
+/* The name never breaks at its hyphen. */
+h1 span {
+  white-space: nowrap;
+}
+
+.lede {
+  max-width: 34em;
+  margin-top: clamp(20px, 3vh, 30px);
+  color: var(--ink-muted);
+  font-size: clamp(17px, 1.5vw, 20px);
+  line-height: 1.5;
+}
+
+.cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 20px;
+  margin-top: clamp(24px, 4vh, 36px);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 26px;
+  border-radius: 999px;
+  background: var(--coral);
+  color: var(--black);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    transform 160ms var(--ease-out),
+    background-color 160ms ease;
+}
+
+.button:active {
+  transform: scale(0.97);
+  background: var(--coral-press);
+}
+
+.meta {
+  color: var(--ink-faint);
+  font: 400 13px/1 var(--mono);
+}
+
+.readout {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 2.9em;
+  margin-top: clamp(28px, 6vh, 56px);
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-muted);
+  font: 400 13px/1.45 var(--mono);
+}
+
+.readout i {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--coral);
+  transform: translateY(-1px);
+}
+
+.readout[data-kind='miss'] i {
+  background: var(--ink-faint);
+}
+
+/* The finger's drawing surface. A phone cannot give the whole hero to
+   drawing: the page still has to scroll. */
+.pad {
+  display: none;
+  position: relative;
+  height: clamp(220px, 34svh, 320px);
+  margin-top: 28px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 20px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.pad span {
+  position: absolute;
+  /* Top corner: the label of a match appears under the shape. */
+  left: 16px;
+  top: 14px;
+  color: var(--ink-faint);
+  font: 400 12px/1 var(--mono);
+  transition: opacity 200ms ease;
+}
+
+.pad[data-used] span {
+  opacity: 0;
+}
+
+.still {
+  display: none;
+  position: absolute;
+  right: 6%;
+  top: 16%;
+  width: min(34vw, 380px);
+  pointer-events: none;
+}
+
+.still circle {
+  fill: none;
+  stroke: var(--coral);
+  stroke-width: 2.2;
+}
+
+.no-live .still {
+  display: block;
+}
+
+@media (pointer: coarse) {
+  .pad {
+    display: block;
+  }
+
+  .no-live .pad,
+  .still {
+    display: none !important;
+  }
+}
+
+/* ---------------------------------------------------------------- sections */
+
+/* A hairline between sections, as wide as the text and no wider. */
+section + section::before,
+footer::before {
+  content: '';
+  position: absolute;
+  inset: 0 var(--pad-right) auto var(--pad-left);
+  height: 1px;
+  background: var(--line);
+}
+
+.gestures,
+.made,
+.setup {
+  padding-block: clamp(64px, 11vh, 128px);
+}
+
+.section-head {
+  display: grid;
+  gap: 16px 48px;
+  align-items: end;
+}
+
+.section-head p,
+.setup li p,
+.needs p,
+.note {
+  color: var(--ink-muted);
+}
+
+.section-head p {
+  max-width: 36em;
+}
+
+/* ---------------------------------------------------------------- gestures */
+
+.shapes {
+  display: grid;
+  margin-top: clamp(28px, 5vh, 52px);
+  list-style: none;
+}
+
+.shape {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 18px;
+  width: 100%;
+  padding: 13px 10px 13px 6px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  transition:
+    background-color 160ms ease,
+    transform 160ms var(--ease-out);
+}
+
+.shape:active {
+  background: var(--lift);
+  transform: scale(0.99);
+}
+
+.shape svg {
+  width: 52px;
+  height: 52px;
+  overflow: visible;
+}
+
+.shape path {
+  fill: none;
+  stroke: var(--coral);
+  stroke-width: 0.052;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 760ms var(--ease-out) var(--delay, 0ms);
+}
+
+.shape circle {
+  fill: var(--ink);
+  opacity: 0;
+  transition: opacity 200ms ease var(--delay, 0ms);
+}
+
+.shapes[data-in] .shape path {
+  stroke-dashoffset: 0;
+}
+
+.shapes[data-in] .shape circle {
+  opacity: 1;
+}
+
+.shape b {
+  display: block;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.shape small {
+  display: block;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.shape .does {
+  text-align: right;
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.shape kbd {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink-faint);
+  font: 400 12px/1.3 var(--mono);
+}
+
+/* -------------------------------------------------------------------- made */
+
+.made dl {
+  margin-top: clamp(28px, 5vh, 52px);
+}
+
+.made dl div {
+  display: grid;
+  gap: 4px 32px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+
+.made dt {
+  color: var(--ink-faint);
+  font: 400 13px/1.9 var(--mono);
+}
+
+.made dd {
+  max-width: 38em;
+}
+
+/* ------------------------------------------------------------------- setup */
+
+.setup ol {
+  display: grid;
+  gap: 28px 40px;
+  margin-top: clamp(28px, 5vh, 52px);
+  list-style: none;
+  counter-reset: step;
+}
+
+.setup li {
+  counter-increment: step;
+}
+
+.setup li::before {
+  content: counter(step);
+  display: block;
+  margin-bottom: 10px;
+  color: var(--coral);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.setup h3 {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+}
+
+.setup li p {
+  margin-top: 6px;
+  font-size: 16px;
+}
+
+.needs {
+  display: grid;
+  gap: 12px;
+  max-width: 44em;
+  margin-top: clamp(36px, 6vh, 64px);
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+
+.needs b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px 24px;
+  margin-top: 16px;
+}
+
+.links a:not(.button) {
+  color: var(--ink);
+}
+
+footer {
+  padding-block: 28px max(28px, env(safe-area-inset-bottom, 0px));
+  color: var(--ink-faint);
+  font-size: 13px;
+}
+
+/* ----------------------------------------------------------------- overlay */
+
+/* Above everything and never a target, like the real one. */
+#overlay,
+#labels {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  pointer-events: none;
+}
+
+#overlay {
+  display: block;
+}
+
+.no-live #overlay,
+.no-live .readout {
+  display: none;
+}
+
+/* -------------------------------------------------------------- wide, hover */
+
+@media (min-width: 760px) {
+  .section-head {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .made dl div {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .setup ol {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 920px) {
+  .shapes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    column-gap: 56px;
+  }
+
+  .made {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 48px;
+    align-items: start;
+  }
+
+  .made h2 {
+    position: sticky;
+    top: 32px;
+  }
+
+  .made dl {
+    margin-top: 0;
+  }
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .hero {
+    cursor: crosshair;
+  }
+
+  .hero a {
+    cursor: pointer;
+  }
+
+  nav a:hover {
+    color: var(--ink);
+  }
+
+  a:not(.button):hover {
+    text-decoration-color: var(--ink-muted);
+  }
+
+  .button:hover {
+    background: #ff6b6b;
+  }
+
+  .button:active {
+    background: var(--coral-press);
+  }
+
+  .shape:hover {
+    background: var(--lift);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shape path,
+  .shape circle,
+  .button,
+  .shape {
+    transition: none;
+  }
+}
