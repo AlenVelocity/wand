@@ -1,0 +1,128 @@
+# Wand configuration.
+#
+# Every threshold the app uses is in this file and nowhere else. The app
+# rewrites single values when you change a setting in the window, and keeps
+# your comments. Save the file and the running app picks the change up.
+
+[recognizer]
+# A stroke matches a gesture when its best template scores at least this.
+# 1.0 is a perfect trace of the template, 0.0 is unrelated.
+min_score = 0.80
+# The winner must also beat the best template of every other gesture by this
+# much. Raise it if two of your gestures get confused with each other.
+min_margin = 0.04
+# Each stroke is resampled to this many points before matching.
+resample_points = 64
+# How far a stroke may be rotated to fit a template, in degrees. Kept small
+# so a flick up is not a slash. Gestures marked "free" in the library (the
+# circle) ignore this and match at any rotation.
+rotation_tolerance_deg = 12.0
+# How much a stroke may be scaled, beyond matching its bounding box, to fit.
+scale_tolerance = 0.20
+# How far points may slip along a template when matching, as a fraction of the
+# stroke. Lets a V with one short arm still line its corner up. 0 is rigid.
+elastic_window = 0.10
+# When a stroke fails as drawn, try it again without the hook at either end,
+# or as its closed loop alone. A hand adds those around almost every shape.
+second_chance = true
+
+[stroke]
+# A stroke that travels less than this many pixels, or lasts less than this
+# many milliseconds, is dropped without feedback (an accidental tap).
+min_length_px = 90.0
+min_duration_ms = 60
+# For the wand only: a stroke must also turn the wand through at least this
+# many degrees of travel, at no less than this average speed. A twitch while
+# pressing the trigger, or the hand drifting with it held, is neither.
+min_length_deg = 10.0
+min_speed_deg_s = 8.0
+# A trigger held longer than this is abandoned.
+max_duration_ms = 6000
+# Buttons that start a stroke while held.
+triggers = ["ZR", "ZL"]
+
+[pointing]
+# Screen pixels per degree of wand rotation. 42 makes a 20 degree flick of the
+# wrist about 840 pixels long.
+px_per_degree = 42.0
+# Where the ember appears when you press the trigger:
+#   "pointing"  where the wand aims, relative to the last Recentre
+#   "cursor"    at the mouse cursor
+#   "center"    the middle of the primary monitor
+anchor = "pointing"
+# Keep the ember this many pixels inside the screen edge when it appears.
+edge_margin_px = 120.0
+# Which way the wand's tip and button face point in the sensor's own axes.
+# Change these only if the 3D preview on the Device page is wrong.
+forward_axis = "+y"
+up_axis = "+z"
+# Mirror the stroke if it moves against your hand.
+invert_x = false
+invert_y = false
+# Pressing this button recentres pointing on the primary monitor.
+recenter_buttons = ["R_STICK", "L_STICK"]
+# One-euro filter on the pointer. A lower cutoff is steadier at rest; a higher
+# beta follows fast motion more tightly.
+smoothing_min_cutoff_hz = 9.0
+smoothing_beta = 0.035
+
+[fusion]
+# Use the magnetometer to hold yaw. Needs the calibration on the Device page.
+use_magnetometer = true
+# How hard gravity pulls pitch and roll back (rad/s per rad of error).
+accel_gain = 1.6
+# Ignore the accelerometer when total acceleration is this far from 1 g.
+accel_gate_g = 0.22
+# How hard the magnetic heading pulls yaw back (rad/s per rad of error).
+mag_gain = 0.5
+# Ignore the magnetometer when field strength is this far (fraction) from the
+# calibrated field: a speaker or the PC case is distorting it.
+mag_gate = 0.30
+# The wand counts as at rest below these, for at least still_time_ms. Gyro
+# bias is re-estimated only while at rest.
+still_gyro_dps = 1.8
+still_accel_g = 0.05
+still_time_ms = 350
+bias_time_constant_s = 1.2
+
+[overlay]
+# The ember is drawn this many milliseconds ahead of the newest sample, along
+# its current velocity, to hide Bluetooth and compositor latency.
+prediction_ms = 10.0
+# The same, for dev mode's mouse (which has almost no transport latency).
+prediction_mouse_ms = 4.0
+# Length of the whole match or no-match confirmation.
+confirm_ms = 400
+# The trail dims over this long, down to tail_floor of its brightness, so the
+# whole stroke stays readable until you release.
+tail_fade_ms = 850
+tail_floor = 0.28
+# Core half-width of the ribbon at rest and at full speed, in pixels.
+width_min_px = 1.3
+width_max_px = 4.6
+# Wand speed (pixels per second) treated as "full speed".
+speed_full_px_s = 3600.0
+# Sparks shed off fast movement. 0 turns them off.
+spark_rate = 1.0
+
+[rumble]
+enabled = true
+# 0..1 strengths. The match tick is one short high-frequency pulse; the
+# no-match signal is two soft low pulses.
+match_strength = 0.80
+match_ms = 14
+no_match_strength = 0.34
+no_match_ms = 26
+no_match_gap_ms = 95
+
+[dev]
+# Dev mode: hold hold_key and move the mouse to draw. Works alongside a
+# connected Joy-Con.
+enabled = false
+hold_key = "RightCtrl"
+# Log actions instead of running them.
+dry_run = false
+
+[actions]
+# Program that runs "shell command" actions: "cmd" or "powershell".
+shell = "cmd"

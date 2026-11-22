@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="halo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff5757" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#ff3b30" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#ff3b30" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ribbon" x1="230" y1="760" x2="720" y2="300" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ff5757" stop-opacity="0.0"/>
+      <stop offset="0.25" stop-color="#ff5757" stop-opacity="0.75"/>
+      <stop offset="1" stop-color="#ff7a52"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="228" fill="#000"/>
+  <!-- one stroke: thin where the hand was slow, wide where it was fast -->
+  <path d="M214 742 C 300 792, 430 770, 500 640 C 560 528, 520 430, 610 352 C 650 318, 700 300, 742 296
+           C 690 322, 664 352, 640 396 C 596 478, 628 572, 560 684 C 470 832, 300 840, 214 742 Z"
+        fill="url(#ribbon)"/>
+  <circle cx="748" cy="292" r="250" fill="url(#halo)"/>
+  <circle cx="748" cy="292" r="74" fill="#ff5757"/>
+  <circle cx="748" cy="292" r="44" fill="#ffd9a8"/>
+  <circle cx="748" cy="292" r="22" fill="#fff"/>
+</svg>

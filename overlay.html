@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Wand overlay</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: transparent;
+        /* Nothing here is ever a target: the window is click-through. */
+        pointer-events: none;
+        user-select: none;
+      }
+      #stage {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        display: block;
+      }
+      #labels {
+        position: fixed;
+        inset: 0;
+      }
+      /* Backgrounds for the browser demo only (overlay.html?bg=...). */
+      html[data-bg] body {
+        pointer-events: auto;
+      }
+      html[data-bg='black'] {
+        background: #000;
+      }
+      html[data-bg='white'] {
+        background: #fff;
+      }
+      html[data-bg='desk'] {
+        background: linear-gradient(120deg, #1f3a5f 0%, #7a4b8a 38%, #e8a15c 72%, #f3e6c8 100%);
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="stage"></canvas>
+    <div id="labels"></div>
+    <script type="module" src="/src/overlay/main.ts"></script>
+  </body>
+</html>
