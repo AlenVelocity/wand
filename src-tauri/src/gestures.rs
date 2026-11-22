@@ -244,19 +244,6 @@ fn circle(clockwise: bool) -> Vec<Pt> {
     recognizer::normalize_uniform(&pts, N).points
 }
 
-/// A triangle with its point up: any corner first, either way round.
-fn triangles() -> Vec<Vec<Pt>> {
-    let c: [Pt; 3] = [[0.0, -0.433], [0.5, 0.433], [-0.5, 0.433]];
-    let mut out = Vec::new();
-    for start in 0..3 {
-        for step in [1, 2] {
-            let at = |k: usize| c[(start + k * step) % 3];
-            out.push(poly(&[at(0), at(1), at(2), at(0)]));
-        }
-    }
-    out
-}
-
 /// A five-pointed star in one stroke from the top point: every second corner
 /// of a pentagon.
 fn star(clockwise: bool) -> Vec<Pt> {
