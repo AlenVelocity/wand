@@ -470,7 +470,7 @@ impl Engine {
     }
 
     pub fn on_report_from(&mut self, r: &InputReport, host_s: f64, source: Source) {
-        let dt = self.clock.step(r.motion_time_us, r.counter, host_s);
+        let dt = self.clock.step(r.counter, host_s);
 
         // Sample time: advances by the sensor's own step so velocity is clean,
         // but never runs ahead of, or more than 40 ms behind, arrival time.

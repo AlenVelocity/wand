@@ -213,74 +213,71 @@ pub fn wrap_pi(a: f32) -> f32 {
 /// Picks the time step for each report.
 ///
 /// Bluetooth delivers reports in bursts, so arrival times are useless for
-/// integration. The sensor's own microsecond timestamp is used when it
-/// advances plausibly; otherwise the report counter times a running estimate
-/// of the report period.
+/// integration one by one. The report counter is the controller's own clock:
+/// on a Joy-Con 2 it counts milliseconds, 15 a report over the link Windows
+/// gives it and 30 over a Mac's. How long a tick is still comes from the
+/// host clock, as total arrival time over total ticks across the last half
+/// minute or so, which bursts cannot skew. That also covers recordings whose
+/// counter adds one a report.
 ///
-/// On a real Joy-Con 2 (R) the "timestamp" turned out not to be microseconds
-/// (it advances about 44,800 a second), so in practice the fallback is what
-/// runs: one report is one period, and the period comes from the host clock
-/// averaged over many reports.
+/// (The motion timestamp is no help: it advances about 44,700 a second, not
+/// once a microsecond.)
 pub struct SampleClock {
-    last_ts: Option<u32>,
     last_counter: Option<u32>,
     last_host: Option<f64>,
-    nominal: f32,
-    seen_host: f32,
-    seen_steps: u32,
+    /// Host seconds and counter ticks seen, both fading with the same
+    /// half-minute time constant.
+    seen_host: f64,
+    seen_ticks: f64,
+    seen_reports: f64,
 }
 
 impl Default for SampleClock {
     fn default() -> Self {
-        // 15 ms is what Windows gives a Joy-Con 2 with a throughput-optimised link.
-        SampleClock { last_ts: None, last_counter: None, last_host: None, nominal: 0.015, seen_host: 0.0, seen_steps: 0 }
+        SampleClock { last_counter: None, last_host: None, seen_host: 0.0, seen_ticks: 0.0, seen_reports: 0.0 }
     }
 }
 
+/// Seconds of arrivals before the tick length is trusted over arrival gaps.
+const CLOCK_WARMUP_S: f64 = 0.1;
+/// How fast old arrivals stop counting.
+const CLOCK_MEMORY_S: f64 = 30.0;
+
 impl SampleClock {
+    /// Reports a second, as the controller sends them.
     pub fn nominal_hz(&self) -> f32 {
-        1.0 / self.nominal
+        if self.seen_host > 0.0 { (self.seen_reports / self.seen_host) as f32 } else { 0.0 }
+    }
+
+    /// Seconds per counter tick, once enough reports have arrived to say.
+    fn tick(&self) -> Option<f64> {
+        (self.seen_host >= CLOCK_WARMUP_S && self.seen_ticks > 0.0).then(|| self.seen_host / self.seen_ticks)
     }
 
     /// `host_s` is a monotonic arrival time in seconds.
-    pub fn step(&mut self, ts_us: u32, counter: u32, host_s: f64) -> f32 {
-        let steps = match self.last_counter {
-            Some(c) => counter.wrapping_sub(c),
-            None => 1,
+    pub fn step(&mut self, counter: u32, host_s: f64) -> f32 {
+        let (Some(last_counter), Some(last_host)) = (self.last_counter.replace(counter), self.last_host.replace(host_s)) else {
+            return 0.0;
         };
-        let ts_delta = self.last_ts.map(|t| ts_us.wrapping_sub(t));
-        let host_delta = self.last_host.map(|h| (host_s - h) as f32);
-        self.last_ts = Some(ts_us);
-        self.last_counter = Some(counter);
-        self.last_host = Some(host_s);
-
-        // Long-run period from the host clock: immune to bursts on average.
-        if let Some(hd) = host_delta {
-            if (1..=20).contains(&steps) && hd > 0.0 && hd < 0.5 {
-                // A plain average at first, so the estimate is right within a
-                // fraction of a second of connecting; a slow moving average after.
-                if self.seen_steps < 400 {
-                    self.seen_host += hd;
-                    self.seen_steps += steps;
-                    if self.seen_steps >= 16 {
-                        self.nominal = (self.seen_host / self.seen_steps as f32).clamp(0.001, 0.05);
-                    }
-                } else {
-                    let per = (hd / steps as f32).clamp(0.001, 0.05);
-                    self.nominal += (per - self.nominal) * 0.01;
-                }
-            }
+        let ticks = counter.wrapping_sub(last_counter);
+        let gap = host_s - last_host;
+        if ticks == 0 {
+            return 0.0; // the same report again
         }
-
-        let steps_f = if (1..=50).contains(&steps) { steps as f32 } else { 1.0 };
-        if let Some(d) = ts_delta {
-            let s = d as f32 * 1e-6;
-            // Plausible if within 4x of what the counter implies.
-            if d > 0 && s < 0.2 && s > steps_f * self.nominal * 0.25 && s < steps_f * self.nominal * 4.0 {
-                return s;
-            }
+        // A counter that jumped back or far ahead is a glitch or a restart,
+        // not elapsed time; neither it nor a long silence teaches anything.
+        let sane = ticks < 1 << 24 && self.tick().is_none_or(|t| ticks as f64 * t < 0.5);
+        if sane && (0.0..0.5).contains(&gap) {
+            let keep = (-gap / CLOCK_MEMORY_S).exp();
+            self.seen_host = self.seen_host * keep + gap;
+            self.seen_ticks = self.seen_ticks * keep + ticks as f64;
+            self.seen_reports = self.seen_reports * keep + 1.0;
         }
-        (steps_f * self.nominal).min(0.1)
+        let dt = match (sane, self.tick()) {
+            (true, Some(t)) => ticks as f64 * t,
+            _ => gap,
+        };
+        dt.clamp(0.0, 0.1) as f32
     }
 }
 
@@ -568,30 +565,56 @@ mod tests {
     }
 
     #[test]
-    fn sample_clock_prefers_sensor_time_and_survives_bursts() {
+    fn sample_clock_survives_bursts() {
         let mut c = SampleClock::default();
         let mut host = 0.0f64;
         let mut total = 0.0f32;
-        // 200 Hz sensor delivered in bursts of three every 15 ms.
+        // 200 Hz, counter one a report, delivered in bursts of three every 15 ms.
         for i in 0..600u32 {
             if i % 3 == 0 {
                 host += 0.015;
             }
-            total += c.step(i * 5000, i, host);
+            total += c.step(i, host);
         }
         assert!((total - 3.0).abs() < 0.05, "integrated {total}s over 3s of samples");
-
-        // Timestamp stuck at zero: fall back to counter x estimated period.
-        let mut c = SampleClock::default();
-        let mut host = 0.0f64;
-        let mut total = 0.0f32;
-        for i in 0..1000u32 {
-            host += 0.008;
-            total += c.step(0, i, host);
-        }
-        assert!((total - 8.0).abs() < 0.4, "fallback integrated {total}s over 8s");
+        assert!((c.nominal_hz() - 200.0).abs() < 5.0, "{} reports/s", c.nominal_hz());
         // A dropped report advances time by two periods.
-        let dt = c.step(0, 1001, host + 0.016);
-        assert!((dt - 0.016).abs() < 0.004, "dropped report dt {dt}");
+        let dt = c.step(601, host + 0.010);
+        assert!((dt - 0.010).abs() < 0.001, "dropped report dt {dt}");
+    }
+
+    #[test]
+    fn sample_clock_reads_a_millisecond_counter_at_any_link_rate() {
+        // A Joy-Con 2 counts milliseconds: 15 a report on Windows, 30 on a Mac.
+        for (period_ms, start) in [(15u32, 4991u32), (30, 1616), (30, u32::MAX - 500)] {
+            let mut c = SampleClock::default();
+            let mut total = 0.0f32;
+            let n = 20_000 / period_ms;
+            for i in 0..n {
+                // Arrivals jitter by a millisecond either way.
+                let jitter = [0.0, 0.001, -0.001, 0.0005][i as usize % 4];
+                total += c.step(start.wrapping_add(i * period_ms), (i * period_ms) as f64 / 1000.0 + jitter);
+            }
+            assert!((total - 20.0).abs() < 0.1, "{period_ms} ms reports: integrated {total}s over 20s");
+            let hz = 1000.0 / period_ms as f32;
+            assert!((c.nominal_hz() - hz).abs() < 1.0, "{} reports/s, want {hz}", c.nominal_hz());
+            // One dropped report: two periods.
+            let next = start.wrapping_add(n * period_ms + period_ms);
+            let dt = c.step(next, (n * period_ms + period_ms) as f64 / 1000.0);
+            assert!((dt * 1000.0 - 2.0 * period_ms as f32).abs() < 0.5, "dropped report dt {dt}");
+        }
+    }
+
+    #[test]
+    fn sample_clock_ignores_a_counter_that_jumps() {
+        let mut c = SampleClock::default();
+        for i in 0..200u32 {
+            c.step(i * 30, i as f64 * 0.03);
+        }
+        // A restart: the counter goes back. Time is the arrival gap, capped.
+        let dt = c.step(5, 200.0 * 0.03);
+        assert!((dt - 0.03).abs() < 0.001, "after a counter restart dt {dt}");
+        let dt = c.step(35, 201.0 * 0.03);
+        assert!((dt - 0.03).abs() < 0.001, "{dt}");
     }
 }
