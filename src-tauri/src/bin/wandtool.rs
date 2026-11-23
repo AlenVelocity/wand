@@ -5,7 +5,10 @@
 //!   wandtool selftest [rounds]      generate many hands per gesture and report scores
 //!   wandtool strokes <file.jsonl>   re-recognise strokes the app logged (strokes.jsonl)
 //!   wandtool sensor <file>          what the optical sensor read over a recording
-//!   wandtool pointer-check          nudge the cursor to see that Windows takes it
+//!   wandtool pointer-check          nudge the cursor to see that the system takes it
+//!   wandtool bluetooth              macOS: this Mac's Bluetooth address and permissions
+//!   wandtool record <file> [secs]   connect a controller, save what it sends, report its timing
+//!   wandtool timing <file>          the timing report for a recording
 //!
 //! `replay` uses the same parser, fusion, projection and recogniser as the
 //! app; only the overlay and the actions are absent. It reads `wand.toml` and
@@ -105,6 +108,18 @@ fn cmd_replay(files: &[PathBuf], data_dir: Option<&Path>) -> anyhow::Result<bool
         }
         for o in outcomes.iter() {
             println!("  {}", describe(o));
+        }
+        // WANDTOOL_STROKES=<file>: the strokes as the app logs them, to plot.
+        if let Some(out) = std::env::var_os("WANDTOOL_STROKES") {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new().create(true).append(true).open(out)?;
+            for o in outcomes.iter().filter(|o| o.path.len() > 1) {
+                let line = serde_json::json!({
+                    "kind": o.kind, "gesture": o.gesture_id, "closest": o.closest, "score": o.score,
+                    "runner_up": o.runner_up, "length_px": o.length_px, "ms": o.duration_ms, "path": o.path,
+                });
+                writeln!(f, "{line}")?;
+            }
         }
         // A file named after a gesture id is expected to produce that gesture.
         if lib.gestures.iter().any(|g| g.id == stem) {
@@ -252,8 +267,187 @@ fn cmd_pointer_check() -> bool {
     let back = wand_lib::pointer::nudge(-2, 0);
     println!("cursor {a:?} -> {b:?} -> {:?}", back.map(|(_, c)| c));
     let moved = b.0 > a.0 && b.1 == a.1;
-    println!("{}", if moved { "Windows accepts injected mouse movement" } else { "the cursor did not move: a window running as administrator may be in front" });
+    let why = if cfg!(target_os = "macos") {
+        "the cursor did not move: allow Accessibility for the app running this (System Settings > Privacy & Security)"
+    } else {
+        "the cursor did not move: a window running as administrator may be in front"
+    };
+    println!("{}", if moved { "the system accepts injected mouse movement" } else { why });
     moved
+}
+
+/// IOBluetooth answers through the main run loop, so the questions go to a
+/// thread and the main thread keeps the loop turning until they are done.
+#[cfg(target_os = "macos")]
+fn cmd_bluetooth() -> bool {
+    extern "C" {
+        fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, return_after_source_handled: u8) -> i32;
+        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+    }
+    let worker = std::thread::spawn(bluetooth_report);
+    while !worker.is_finished() {
+        unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, 0) };
+    }
+    worker.join().unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn bluetooth_report() -> bool {
+    use wand_lib::macos;
+    let denied = macos::bluetooth_denied();
+    let address = macos::bluetooth_address_within(std::time::Duration::from_secs(10));
+    println!("bluetooth permission: {}", if denied { "denied" } else { "not refused" });
+    match address {
+        Some(a) => println!("this Mac's address: {a:012x}"),
+        None => println!("this Mac's address: unknown (controllers can pair but will not reconnect by themselves)"),
+    }
+    println!("accessibility: {}", if macos::accessibility_trusted() { "allowed" } else { "not allowed" });
+    for d in macos::displays() {
+        println!(
+            "display: {:.0}x{:.0} points at ({:.0}, {:.0}), scale {}{}",
+            d.bounds.size.width, d.bounds.size.height, d.bounds.origin.x, d.bounds.origin.y, d.scale, if d.main { ", main" } else { "" }
+        );
+    }
+    !denied && address.is_some()
+}
+
+#[cfg(not(target_os = "macos"))]
+fn cmd_bluetooth() -> bool {
+    println!("only on macOS");
+    false
+}
+
+/// Connect the way the app does, save `secs` seconds of reports, then say
+/// how the controller's counters advanced against the host clock. Quit the
+/// app first: a controller talks to one program at a time.
+fn cmd_record(path: PathBuf, secs: f64) -> bool {
+    let _ = simplelog::SimpleLogger::init(simplelog::LevelFilter::Info, simplelog::Config::default());
+    let worker = std::thread::spawn(move || record(&path, secs));
+    #[cfg(target_os = "macos")]
+    {
+        // The Bluetooth address comes through the main run loop.
+        extern "C" {
+            fn CFRunLoopRunInMode(mode: *const std::ffi::c_void, seconds: f64, return_after_source_handled: u8) -> i32;
+            static kCFRunLoopDefaultMode: *const std::ffi::c_void;
+        }
+        while !worker.is_finished() {
+            unsafe { CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, 0) };
+        }
+    }
+    match worker.join() {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            eprintln!("{e:#}");
+            false
+        }
+        Err(_) => false,
+    }
+}
+
+fn record(path: &Path, secs: f64) -> anyhow::Result<()> {
+    use std::sync::mpsc;
+    use wand_lib::joycon::{self, Control, Hooks};
+    use wand_lib::replay::{Header, Recorder};
+
+    let header = Header { wandrec: 1, source: "joycon".into(), product_id: 0, note: "wandtool record".into() };
+    let rec = Arc::new(Mutex::new(Recorder::create(path, &header)?));
+    let (tx, rx) = mpsc::channel::<(f64, InputReport)>();
+    let tx = Mutex::new(tx);
+    let sink = rec.clone();
+    let hooks = Hooks {
+        report: Box::new(move |raw, r, t| {
+            let _ = sink.lock().unwrap().push(t, raw);
+            let _ = tx.lock().unwrap().send((t, *r));
+        }),
+        status: Box::new(|s| println!("status: {:?} {}", s.state, s.detail)),
+        connected: Box::new(|i| println!("connected: {i:?}")),
+        lost: Box::new(|| println!("lost")),
+        rumble_cfg: Box::new(Default::default),
+        mouse_enabled: Box::new(|| false),
+    };
+    let ctl = joycon::spawn(hooks, std::time::Instant::now());
+    println!("waiting for a controller: press any button on it (or hold sync to pair)");
+
+    let mut got: Vec<(f64, InputReport)> = Vec::new();
+    let deadline_wait = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut start: Option<f64> = None;
+    loop {
+        match rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            Ok((t, r)) => {
+                // Skip the reports from before the motion sensors start.
+                if r.motion_time_us == 0 {
+                    continue;
+                }
+                let s = *start.get_or_insert_with(|| {
+                    println!("recording {secs} s: move the wand around, draw a few circles");
+                    t
+                });
+                got.push((t, r));
+                if t - s >= secs {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) if start.is_none() && std::time::Instant::now() > deadline_wait => {
+                let _ = ctl.send(Control::Shutdown);
+                anyhow::bail!("no controller within two minutes");
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    let _ = ctl.send(Control::Shutdown);
+    let n = {
+        let mut rec = rec.lock().unwrap();
+        rec.flush()?;
+        rec.reports
+    };
+    println!("saved {n} reports to {}", path.display());
+    timing_report(&got);
+    Ok(())
+}
+
+/// Steps between consecutive reports: counter, motion clock, host clock.
+fn timing_report(got: &[(f64, InputReport)]) {
+    if got.len() < 3 {
+        println!("too few reports to say anything");
+        return;
+    }
+    let span = got.last().unwrap().0 - got[0].0;
+    let mut counter = std::collections::BTreeMap::<i64, u32>::new();
+    let mut motion = std::collections::BTreeMap::<i64, u32>::new();
+    let mut host = std::collections::BTreeMap::<i64, u32>::new();
+    for w in got.windows(2) {
+        let (a, b) = (&w[0].1, &w[1].1);
+        *counter.entry(b.counter.wrapping_sub(a.counter) as i32 as i64).or_default() += 1;
+        *motion.entry((b.motion_time_us.wrapping_sub(a.motion_time_us) as i32 as i64 + 50) / 100 * 100).or_default() += 1;
+        *host.entry(((w[1].0 - w[0].0) * 1000.0).round() as i64).or_default() += 1;
+    }
+    let total = |m: &std::collections::BTreeMap<i64, u32>| -> String {
+        let mut v: Vec<_> = m.iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1));
+        v.iter().take(8).map(|(k, n)| format!("{k}x{n}")).collect::<Vec<_>>().join(" ")
+    };
+    let first = &got[0].1;
+    let last = &got.last().unwrap().1;
+    println!("{} reports over {span:.2} s = {:.1}/s", got.len(), (got.len() - 1) as f64 / span);
+    println!(
+        "counter: {} -> {} ({:.1} per second); steps {}",
+        first.counter,
+        last.counter,
+        last.counter.wrapping_sub(first.counter) as f64 / span,
+        total(&counter)
+    );
+    println!(
+        "motion clock: {} -> {} ({:.0} per second); steps (to 100) {}",
+        first.motion_time_us,
+        last.motion_time_us,
+        last.motion_time_us.wrapping_sub(first.motion_time_us) as f64 / span,
+        total(&motion)
+    );
+    println!("host ms between reports: {}", total(&host));
+    let mut clock = wand_lib::fusion::SampleClock::default();
+    let sum: f32 = got.iter().map(|(t, r)| clock.step(r.counter, *t)).sum();
+    println!("the sample clock integrates {sum:.2} s over {span:.2} s");
 }
 
 fn cmd_selftest(rounds: usize) -> bool {
@@ -330,11 +524,30 @@ fn main() -> anyhow::Result<()> {
             true
         }
         Some("pointer-check") => cmd_pointer_check(),
+        Some("bluetooth") => cmd_bluetooth(),
+        Some("timing") if args.len() > 1 => {
+            let rec = Recording::load(Path::new(&args[1]))?;
+            let got: Vec<(f64, InputReport)> = rec
+                .reports
+                .iter()
+                .filter_map(|(us, raw)| Some((*us as f64 * 1e-6, InputReport::parse(raw)?)))
+                .filter(|(_, r)| r.motion_time_us != 0)
+                .collect();
+            timing_report(&got);
+            true
+        }
+        Some("record") if args.len() > 1 => {
+            let secs = args.get(2).and_then(|n| n.parse().ok()).unwrap_or(20.0);
+            cmd_record(PathBuf::from(&args[1]), secs)
+        }
         _ => {
             eprintln!("usage:\n  wandtool synth <dir>\n  wandtool replay [--data-dir <dir>] <file.wandrec>...\n  wandtool selftest [rounds]
   wandtool strokes [--data-dir <dir>] <strokes.jsonl> [--window f] [--min-score f] [--px-per-degree f]
   wandtool sensor [--data-dir <dir>] <file.wandrec>
-  wandtool pointer-check");
+  wandtool pointer-check
+  wandtool bluetooth
+  wandtool record <file.wandrec> [seconds]
+  wandtool timing <file.wandrec>");
             false
         }
     };

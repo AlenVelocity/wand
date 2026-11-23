@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ICON_NAMES, suggestIcon } from '../shared/icons';
 import type { Action } from '../shared/types';
 import { backend } from './api';
+import { isMac } from './platform';
 import { Icon } from './ui';
 
 const KINDS: { type: Action['type']; label: string }[] = [
@@ -75,7 +76,10 @@ export function ActionEditor({ action, label, icon, mediaKeys, onChange }: Props
       e.stopPropagation();
       const name = keyName(e);
       if (!name) return;
-      const mods = [e.ctrlKey && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt', e.metaKey && 'Win'].filter(Boolean) as string[];
+      const mods = (isMac
+        ? [e.ctrlKey && 'Ctrl', e.altKey && 'Option', e.shiftKey && 'Shift', e.metaKey && 'Cmd']
+        : [e.ctrlKey && 'Ctrl', e.shiftKey && 'Shift', e.altKey && 'Alt', e.metaKey && 'Win']
+      ).filter(Boolean) as string[];
       if (name === 'Esc' && mods.length === 0) {
         setListening(false);
         return;
@@ -110,7 +114,7 @@ export function ActionEditor({ action, label, icon, mediaKeys, onChange }: Props
             <input
               className="input mono grow"
               value={action.keys}
-              placeholder="Ctrl+Shift+S"
+              placeholder={isMac ? 'Cmd+Shift+S' : 'Ctrl+Shift+S'}
               spellCheck={false}
               onChange={(e) => set({ type: 'key_combo', keys: e.target.value })}
             />
@@ -118,7 +122,11 @@ export function ActionEditor({ action, label, icon, mediaKeys, onChange }: Props
               {listening ? 'Press the keys…' : 'Record keys'}
             </button>
           </div>
-          <p className="note">Type it, or record it. Combinations Windows keeps for itself, like Win+L, cannot be recorded but can be typed.</p>
+          <p className="note">
+            {isMac
+              ? 'Type it, or record it. Combinations macOS or this window keep for themselves, like Cmd+Tab or Cmd+W, cannot be recorded but can be typed.'
+              : 'Type it, or record it. Combinations Windows keeps for itself, like Win+L, cannot be recorded but can be typed.'}
+          </p>
         </div>
       )}
 

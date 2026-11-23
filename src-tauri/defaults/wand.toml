@@ -74,9 +74,10 @@ enabled = true
 # Cursor pixels per count from the sensor. Windows applies its own pointer
 # speed on top.
 sensitivity = 1.0
-# The controller reports about 68 times a second. Each report's movement is
-# spread over this many milliseconds so the cursor moves on every frame of a
-# fast display. 0 sends each report as one jump.
+# The controller reports about 68 times a second (about 33 on a Mac). Each
+# report's movement is spread over this many milliseconds, or until the next
+# report if that is later, so the cursor moves on every frame of a fast
+# display. 0 sends each report as one jump.
 smoothing_ms = 15.0
 # Flip an axis if the cursor moves against your hand.
 invert_x = false

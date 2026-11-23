@@ -24,7 +24,7 @@ path = "src/bin/wandtool.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
@@ -58,6 +58,21 @@ windows = { version = "0.61", features = [
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_WindowsAndMessaging",
+] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "objc2", "CFCGTypes"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+  "std",
+  "CGDirectDisplay",
+  "CGDisplayConfiguration",
+  "CGError",
+  "CGEvent",
+  "CGEventSource",
+  "CGEventTypes",
+  "CGRemoteOperation",
+  "objc2",
 ] }
 
 [profile.dev]

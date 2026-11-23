@@ -47,6 +47,11 @@ impl Recorder {
         Ok(())
     }
 
+    pub fn flush(&mut self) -> anyhow::Result<()> {
+        self.out.flush()?;
+        Ok(())
+    }
+
     pub fn finish(mut self) -> anyhow::Result<u64> {
         self.out.flush()?;
         Ok(self.reports)

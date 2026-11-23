@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Pose, Snapshot, Surface } from '../shared/types';
 import { backend } from './api';
+import { isMac } from './platform';
 import { JoyConView } from './joycon3d';
 
 const STATE_WORDS: Record<string, string> = {
@@ -326,9 +327,15 @@ export function Device({ snap, toast }: { snap: Snapshot; toast(text: string): v
           ) : (
             <ol className="howto">
               <li>
-                <span>
-                  <b>Do not pair it in Windows settings.</b> If it is listed under Bluetooth devices there, remove it first: Windows pairing makes the controller hang up.
-                </span>
+                {isMac ? (
+                  <span>
+                    <b>Do not pair it in System Settings.</b> Wand pairs it itself. If it is listed under Bluetooth there, choose Forget This Device first.
+                  </span>
+                ) : (
+                  <span>
+                    <b>Do not pair it in Windows settings.</b> If it is listed under Bluetooth devices there, remove it first: Windows pairing makes the controller hang up.
+                  </span>
+                )}
               </li>
               <li>
                 <span>

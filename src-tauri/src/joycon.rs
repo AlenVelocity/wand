@@ -1,7 +1,7 @@
 //! Bluetooth LE driver for the Joy-Con 2.
 //!
 //! One background thread owns the radio. It scans for a controller that is
-//! either in pairing mode or advertising to reconnect to this PC, connects,
+//! either in pairing mode or advertising to reconnect to this computer, connects,
 //! runs Nintendo's pairing if needed, switches on the sensors, then streams
 //! input reports to the hooks until the link drops, and starts over. That
 //! loop is the auto-reconnect.
@@ -17,7 +17,7 @@ use btleplug::api::{
     Central, CentralEvent, CentralState, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter,
     ValueNotification, WriteType,
 };
-use btleplug::platform::{Manager, Peripheral};
+use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::{Stream, StreamExt};
 use serde::Serialize;
 use std::pin::Pin;
@@ -102,11 +102,15 @@ enum End {
     Shutdown,
 }
 
+/// "PC" or "Mac", for messages.
+const COMPUTER: &str = if cfg!(target_os = "macos") { "Mac" } else { "PC" };
+
 async fn driver(hooks: Hooks, t0: Instant, mut ctl: UnboundedReceiver<Control>) {
     let mut status = DeviceStatus::default();
     let mut had_link = false;
+    let mut kept: Option<Adapter> = None;
     loop {
-        let result = session(&hooks, t0, &mut ctl, &mut status, had_link).await;
+        let result = session(&hooks, t0, &mut ctl, &mut status, had_link, &mut kept).await;
         (hooks.lost)();
         match result {
             Ok(End::Shutdown) => return,
@@ -139,6 +143,23 @@ async fn driver(hooks: Hooks, t0: Instant, mut ctl: UnboundedReceiver<Control>) 
             }
         }
     }
+}
+
+/// This computer's Bluetooth address, which the controller stores at pairing
+/// and advertises to when it wants to reconnect. Zero when unknown.
+async fn host_address(adapter: &Adapter) -> u64 {
+    #[cfg(target_os = "macos")]
+    let address = {
+        // CoreBluetooth does not say; btleplug reports none.
+        let _ = adapter;
+        tokio::task::spawn_blocking(|| crate::macos::bluetooth_address_within(Duration::from_secs(5))).await.ok().flatten()
+    };
+    #[cfg(not(target_os = "macos"))]
+    let address = adapter.adapter_address().await.ok().flatten().map(u64::from);
+    if address.is_none() {
+        log::warn!("this {COMPUTER}'s Bluetooth address is unknown: controllers can pair but will not reconnect by themselves");
+    }
+    address.unwrap_or(0)
 }
 
 type Notifications = Pin<Box<dyn Stream<Item = ValueNotification> + Send>>;
@@ -220,23 +241,50 @@ async fn session(
     ctl: &mut UnboundedReceiver<Control>,
     status: &mut DeviceStatus,
     had_link: bool,
+    kept: &mut Option<Adapter>,
 ) -> anyhow::Result<End> {
-    let manager = Manager::new().await.context("Bluetooth is not available")?;
-    let Some(adapter) = manager.adapters().await?.into_iter().next() else {
+    #[cfg(target_os = "macos")]
+    if crate::macos::bluetooth_denied() {
         status.state = LinkState::BluetoothOff;
-        bail!("This PC has no Bluetooth adapter.");
+        bail!("Wand is not allowed to use Bluetooth. Allow it in System Settings > Privacy & Security > Bluetooth.");
+    }
+    let adapter = match kept.clone() {
+        Some(a) => a,
+        None => {
+            let manager = Manager::new().await.context("Bluetooth is not available")?;
+            let Some(a) = manager.adapters().await?.into_iter().next() else {
+                status.state = LinkState::BluetoothOff;
+                bail!("This {COMPUTER} has no Bluetooth adapter.");
+            };
+            // CoreBluetooth gives each adapter a thread that never ends, so
+            // on macOS one adapter serves every session. Elsewhere each
+            // session starts afresh, which survives an adapter coming and going.
+            if cfg!(target_os = "macos") {
+                *kept = Some(a.clone());
+            }
+            a
+        }
     };
     if matches!(adapter.adapter_state().await, Ok(CentralState::PoweredOff)) {
         status.state = LinkState::BluetoothOff;
+        if cfg!(target_os = "macos") {
+            bail!("Bluetooth is turned off. Turn it on in Control Centre.");
+        }
         bail!("Bluetooth is turned off. Turn it on in Windows settings.");
     }
-    let host: u64 = adapter.adapter_address().await.ok().flatten().map(u64::from).unwrap_or(0);
+    let host = host_address(&adapter).await;
+    // The address arrives once the permission is granted. Pairing without it
+    // would leave a controller that never reconnects, so wait.
+    #[cfg(target_os = "macos")]
+    if host == 0 && crate::macos::bluetooth_undecided() {
+        bail!("Waiting for Bluetooth permission. Allow Wand when macOS asks.");
+    }
 
     let mut events = adapter.events().await?;
     adapter.start_scan(ScanFilter::default()).await.context("could not start scanning")?;
     status.state = if had_link { LinkState::Reconnecting } else { LinkState::Searching };
     if status.detail.is_empty() || !had_link {
-        status.detail = "Hold the small sync button on the Joy-Con's rail until its lights chase. A controller already paired with this PC reconnects when you press any button.".into();
+        status.detail = format!("Hold the small sync button on the Joy-Con's rail until its lights chase. A controller already paired with this {COMPUTER} reconnects when you press any button.");
     }
     (hooks.status)(status);
 
@@ -249,12 +297,15 @@ async fn session(
                     if !proto::is_supported(a.product_id) {
                         continue;
                     }
-                    if a.host_address == 0 || host == 0 || a.host_address == host {
+                    // Without this computer's address nothing can be told
+                    // apart, so only a controller in pairing mode will do:
+                    // one paired with a console stays the console's.
+                    if a.host_address == 0 || (host != 0 && a.host_address == host) {
                         break (id, a);
                     }
-                    let hint = format!("A {} nearby is paired with another device. Hold its sync button to pair it with this PC.", proto::controller_name(a.product_id));
+                    let hint = format!("A {} nearby is paired with another device. Hold its sync button to pair it with this {COMPUTER}.", proto::controller_name(a.product_id));
                     if status.detail != hint {
-                        log::info!("saw a {} that wants host {:012x}; this PC is {:012x}", proto::controller_name(a.product_id), a.host_address, host);
+                        log::info!("saw a {} that wants host {:012x}; this {COMPUTER} is {:012x}", proto::controller_name(a.product_id), a.host_address, host);
                         status.detail = hint;
                         (hooks.status)(status);
                     }
@@ -279,7 +330,7 @@ async fn session(
 
     let pairing = advert.host_address == 0;
     log::info!(
-        "found {} ({}); its host field is {:012x}, this PC is {:012x}",
+        "found {} ({}); its host field is {:012x}, this {COMPUTER} is {:012x}",
         proto::controller_name(advert.product_id),
         if pairing { "pairing mode" } else { "reconnecting" },
         advert.host_address,
@@ -314,8 +365,11 @@ async fn run_link(
     // Windows defaults a BLE link to a slow connection interval and the
     // controller never asks for a faster one itself. Hold a throughput request
     // open for as long as the link lives.
+    // A Mac does the same at 30 ms; there the request goes by the
+    // peripheral's CoreBluetooth identifier.
     let address: u64 = p.address().into();
-    let _fast = tokio::task::spawn_blocking(move || fast_link::request(address)).await.ok().flatten();
+    let id = p.id().to_string();
+    let _fast = tokio::task::spawn_blocking(move || fast_link::request(address, &id)).await.ok().flatten();
 
     log::info!("link up, reading services");
     p.discover_services().await.context("could not read the controller's services")?;
@@ -566,7 +620,7 @@ mod fast_link {
         _request: BluetoothLEPreferredConnectionParametersRequest,
     }
 
-    pub fn request(address: u64) -> Option<FastLink> {
+    pub fn request(address: u64, _id: &str) -> Option<FastLink> {
         let run = || -> windows::core::Result<FastLink> {
             let device = BluetoothLEDevice::FromBluetoothAddressAsync(address)?.get()?;
             let params = BluetoothLEPreferredConnectionParameters::ThroughputOptimized()?;
@@ -584,10 +638,19 @@ mod fast_link {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod fast_link {
+    pub use crate::macos::LowLatency as FastLink;
+
+    pub fn request(_address: u64, id: &str) -> Option<FastLink> {
+        crate::macos::request_low_latency(id, std::time::Duration::from_secs(3))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod fast_link {
     pub struct FastLink;
-    pub fn request(_: u64) -> Option<FastLink> {
+    pub fn request(_: u64, _: &str) -> Option<FastLink> {
         None
     }
 }

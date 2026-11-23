@@ -278,6 +278,12 @@ h3 {
   white-space: nowrap;
 }
 
+.banner .btn {
+  flex: none;
+  align-self: center;
+  margin-left: auto;
+}
+
 /* --------------------------------------------------------------- controls */
 
 .btn {

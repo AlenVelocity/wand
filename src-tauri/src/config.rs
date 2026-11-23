@@ -6,7 +6,35 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_TOML: &str = include_str!("../defaults/wand.toml");
+const SHIPPED_TOML: &str = include_str!("../defaults/wand.toml");
+
+/// Lines of the shipped file that differ on a Mac, as (Windows, macOS).
+const MAC_LINES: &[(&str, &str)] = &[
+    (
+        "# Cursor pixels per count from the sensor. Windows applies its own pointer\n# speed on top.",
+        "# Cursor pixels per count from the sensor. macOS adds no acceleration of its\n# own to it.",
+    ),
+    // A Mac keyboard has no right Control key.
+    ("hold_key = \"RightCtrl\"", "hold_key = \"RightOption\""),
+    (
+        "# Program that runs \"shell command\" actions: \"cmd\" or \"powershell\".\nshell = \"cmd\"",
+        "# Program that runs \"shell command\" actions: \"zsh\", \"bash\" or \"sh\".\nshell = \"zsh\"",
+    ),
+];
+
+/// The shipped `wand.toml` for this platform.
+pub fn default_toml() -> &'static str {
+    static TEXT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TEXT.get_or_init(|| {
+        let mut text = SHIPPED_TOML.to_string();
+        if cfg!(target_os = "macos") {
+            for (windows, mac) in MAC_LINES {
+                text = text.replace(windows, mac);
+            }
+        }
+        text
+    })
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -152,7 +180,7 @@ fn shipped() -> &'static Config {
             dev: DevRaw,
             actions: ActionsRaw,
         }
-        let s: Strict = toml::from_str(DEFAULT_TOML).expect("defaults/wand.toml must be complete");
+        let s: Strict = toml::from_str(default_toml()).expect("defaults/wand.toml must be complete");
         Config {
             recognizer: s.recognizer.into(),
             stroke: s.stroke.into(),
@@ -301,7 +329,7 @@ pub fn missing_sections(text: &str) -> String {
         }
         block.clear();
     };
-    for line in DEFAULT_TOML.lines() {
+    for line in default_toml().lines() {
         let header = line.trim().strip_prefix('[').and_then(|l| l.strip_suffix(']'));
         if let Some(name) = header {
             flush(current, &mut block, &mut out);
@@ -324,7 +352,7 @@ pub fn load_or_init(path: &Path) -> (Config, Option<String>) {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(path, DEFAULT_TOML);
+        let _ = std::fs::write(path, default_toml());
     }
     if let Ok(text) = std::fs::read_to_string(path) {
         let added = missing_sections(&text);
@@ -343,7 +371,7 @@ pub fn load_or_init(path: &Path) -> (Config, Option<String>) {
 
 /// Set `[section] key = value` in place, preserving everything else.
 pub fn set_value(path: &Path, section: &str, key: &str, value: toml_edit::Value) -> anyhow::Result<()> {
-    let text = std::fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_TOML.to_string());
+    let text = std::fs::read_to_string(path).unwrap_or_else(|_| default_toml().to_string());
     let mut doc: toml_edit::DocumentMut = text.parse()?;
     if doc.get(section).is_none() {
         doc[section] = toml_edit::Item::Table(toml_edit::Table::new());
@@ -373,8 +401,16 @@ mod tests {
         assert!(cfg.recognizer.min_score > 0.5 && cfg.recognizer.min_score < 1.0);
         assert_eq!(cfg.recognizer.resample_points, 64);
         assert_eq!(cfg.stroke.triggers, vec!["ZR", "ZL"]);
-        assert_eq!(cfg.dev.hold_key, "RightCtrl");
-        assert_eq!(Config::from_toml(DEFAULT_TOML).unwrap(), cfg);
+        assert_eq!(cfg.dev.hold_key, if cfg!(target_os = "macos") { "RightOption" } else { "RightCtrl" });
+        assert_eq!(Config::from_toml(default_toml()).unwrap(), cfg);
+    }
+
+    #[test]
+    fn every_mac_line_is_in_the_shipped_file() {
+        for (windows, mac) in MAC_LINES {
+            assert!(SHIPPED_TOML.contains(windows), "defaults/wand.toml no longer has: {windows}");
+            assert!(Config::from_toml(&SHIPPED_TOML.replace(windows, mac)).is_ok());
+        }
     }
 
     #[test]
@@ -390,7 +426,7 @@ mod tests {
         // A file from before the mouse section existed, with a value changed.
         let mut old = String::new();
         let mut skipping = false;
-        for line in DEFAULT_TOML.lines() {
+        for line in default_toml().lines() {
             if line.starts_with('[') {
                 skipping = line.trim() == "[mouse]";
             }
@@ -410,7 +446,7 @@ mod tests {
         assert_eq!(cfg.mouse, Config::default().mouse);
         // Nothing to add the second time, and nothing for a complete file.
         assert!(missing_sections(&merged).is_empty());
-        assert!(missing_sections(DEFAULT_TOML).is_empty());
+        assert!(missing_sections(default_toml()).is_empty());
     }
 
     #[test]
@@ -418,7 +454,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("wand-cfg-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("wand.toml");
-        std::fs::write(&path, DEFAULT_TOML).unwrap();
+        std::fs::write(&path, default_toml()).unwrap();
         set_value(&path, "dev", "enabled", true.into()).unwrap();
         set_value(&path, "recognizer", "min_score", 0.75.into()).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();

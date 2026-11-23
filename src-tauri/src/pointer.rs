@@ -1,8 +1,9 @@
-//! The cursor: what the engine's `PointerEvent`s become on Windows.
+//! The cursor: what the engine's `PointerEvent`s become.
 //!
-//! One thread owns the mouse. Moves are relative, sent with `SendInput`, so
-//! they pass through the same path as a real mouse and Windows applies the
-//! user's pointer speed. The thread sleeps on its queue; it only ticks while
+//! One thread owns the mouse. On Windows moves are relative, sent with
+//! `SendInput`, so they pass through the same path as a real mouse and
+//! Windows applies the user's pointer speed. On macOS they are Quartz events
+//! at the new position. The thread sleeps on its queue; it only ticks while
 //! there is movement left to hand out.
 
 use crate::engine::{MouseButton, PointerEvent};
@@ -13,13 +14,24 @@ pub enum Cmd {
     Event(PointerEvent),
     /// `mouse.smoothing_ms` changed.
     Smoothing(f32),
+    /// Reports a second the controller is sending now.
+    ReportRate(f32),
+}
+
+/// How long each report's movement is spread over: what the setting asks
+/// for, stretched to the time between reports when they come further apart.
+/// Off stays off.
+fn glide_span(chosen_ms: f32, report_hz: f32) -> f32 {
+    let between_ms = if report_hz > 0.0 { (1000.0 / report_hz).min(50.0) } else { 0.0 };
+    if chosen_ms > 0.0 { chosen_ms.max(between_ms) } else { 0.0 }
 }
 
 /// Hands movement out evenly over time.
 ///
-/// The controller reports its position about 68 times a second. Sent as it
-/// arrives, the cursor would hop 68 times a second across a display drawing
-/// 240. Each report's travel is instead paid out over the next `span_ms`, one
+/// The controller reports its position about 68 times a second over the link
+/// Windows gives it, and about 33 over a Mac's. Sent as it arrives, the
+/// cursor would hop at that rate across a display drawing 120 or 240. Each
+/// report's travel is instead paid out over the next `span_ms`, one
 /// millisecond at a time, which at one report interval turns the hops into a
 /// steady glide. Reports that arrive in a clump queue behind one another, up
 /// to twice the span, so a clump is not a lurch.
@@ -98,7 +110,8 @@ pub fn spawn(smoothing_ms: f32, live: impl Fn() -> bool + Send + 'static) -> Sen
     std::thread::Builder::new()
         .name("wand-pointer".into())
         .spawn(move || {
-            let mut spread = Spreader::new(smoothing_ms);
+            let (mut chosen_ms, mut report_hz) = (smoothing_ms, 0.0f32);
+            let mut spread = Spreader::new(glide_span(chosen_ms, report_hz));
             let mut held = [false; 3];
             let mut wheel = 0.0f32;
             let mut last = Instant::now();
@@ -121,7 +134,14 @@ pub fn spawn(smoothing_ms: f32, live: impl Fn() -> bool + Send + 'static) -> Sen
                 };
                 while let Some(cmd) = next {
                     match cmd {
-                        Cmd::Smoothing(ms) => spread.set_span(ms),
+                        Cmd::Smoothing(ms) => {
+                            chosen_ms = ms;
+                            spread.set_span(glide_span(chosen_ms, report_hz));
+                        }
+                        Cmd::ReportRate(hz) => {
+                            report_hz = hz;
+                            spread.set_span(glide_span(chosen_ms, report_hz));
+                        }
                         Cmd::Event(PointerEvent::Move { dx, dy }) => {
                             if live() {
                                 if spread.idle() {
@@ -245,7 +265,141 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+/// Movement is in physical pixels, as on Windows; macOS places the cursor in
+/// points, so a move is divided by the scale of the display it starts on.
+/// Quartz applies no acceleration to these events.
+#[cfg(target_os = "macos")]
+mod platform {
+    use crate::engine::MouseButton;
+    use crate::macos::{self, contains};
+    use objc2_core_foundation::CGPoint;
+    use objc2_core_graphics::{CGEventField, CGEventType, CGMouseButton};
+    use parking_lot::Mutex;
+    use std::time::Instant;
+
+    /// Pixels of scrolling per wheel notch (120 units). About three lines.
+    const PIXELS_PER_NOTCH: f64 = 60.0;
+
+    struct State {
+        held: [bool; 3],
+        /// Where this thread last put the cursor. macOS may round what it
+        /// reports back; continuing from here keeps sub-point movement.
+        last: Option<CGPoint>,
+        last_down: Option<(MouseButton, Instant, CGPoint)>,
+        clicks: i64,
+        wheel_carry: f64,
+    }
+
+    static STATE: Mutex<State> =
+        Mutex::new(State { held: [false; 3], last: None, last_down: None, clicks: 1, wheel_carry: 0.0 });
+
+    fn slot(b: MouseButton) -> usize {
+        match b {
+            MouseButton::Left => 0,
+            MouseButton::Right => 1,
+            MouseButton::Middle => 2,
+        }
+    }
+
+    fn here(s: &mut State) -> Option<CGPoint> {
+        let read = macos::cursor_points()?;
+        Some(match s.last {
+            Some(l) if (l.x - read.x).abs() <= 1.0 && (l.y - read.y).abs() <= 1.0 => l,
+            _ => read,
+        })
+    }
+
+    pub fn move_by(dx: i32, dy: i32) {
+        if dx == 0 && dy == 0 {
+            return;
+        }
+        let mut s = STATE.lock();
+        let Some(from) = here(&mut s) else { return };
+        let displays = macos::displays();
+        let on = displays.iter().find(|d| contains(&d.bounds, from)).or(displays.first());
+        let scale = on.map_or(1.0, |d| d.scale);
+        let (mx, my) = (dx as f64 / scale, dy as f64 / scale);
+        let mut to = CGPoint::new(from.x + mx, from.y + my);
+        // Off every display: stop at the edge of the one the cursor is on.
+        if let (false, Some(d)) = (displays.iter().any(|d| contains(&d.bounds, to)), on) {
+            let r = d.bounds;
+            to.x = to.x.clamp(r.origin.x, r.origin.x + r.size.width - 0.5);
+            to.y = to.y.clamp(r.origin.y, r.origin.y + r.size.height - 0.5);
+        }
+        s.last = Some(to);
+        // With a button held, apps expect drags, not moves.
+        let (kind, button) = match s.held {
+            [true, _, _] => (CGEventType::LeftMouseDragged, CGMouseButton::Left),
+            [_, true, _] => (CGEventType::RightMouseDragged, CGMouseButton::Right),
+            [_, _, true] => (CGEventType::OtherMouseDragged, CGMouseButton::Center),
+            _ => (CGEventType::MouseMoved, CGMouseButton::Left),
+        };
+        drop(s);
+        if let Some(event) = macos::mouse_event(kind, to, button) {
+            macos::set_field(&event, CGEventField::MouseEventDeltaX, mx.round() as i64);
+            macos::set_field(&event, CGEventField::MouseEventDeltaY, my.round() as i64);
+            macos::post_event(&event);
+        }
+    }
+
+    /// Apps count double clicks from the click count on the event, which a
+    /// real mouse gets from the system. Synthetic clicks have to carry it.
+    pub fn button(button: MouseButton, down: bool) {
+        let mut s = STATE.lock();
+        let Some(at) = here(&mut s) else { return };
+        if down {
+            let now = Instant::now();
+            let again = matches!(s.last_down, Some((b, t, p)) if b == button
+                && now.duration_since(t).as_secs_f64() <= macos::double_click_interval()
+                && (p.x - at.x).abs() <= 4.0 && (p.y - at.y).abs() <= 4.0);
+            s.clicks = if again { s.clicks + 1 } else { 1 };
+            s.last_down = Some((button, now, at));
+        }
+        s.held[slot(button)] = down;
+        let clicks = s.clicks;
+        drop(s);
+        let (kind, cg) = match (button, down) {
+            (MouseButton::Left, true) => (CGEventType::LeftMouseDown, CGMouseButton::Left),
+            (MouseButton::Left, false) => (CGEventType::LeftMouseUp, CGMouseButton::Left),
+            (MouseButton::Right, true) => (CGEventType::RightMouseDown, CGMouseButton::Right),
+            (MouseButton::Right, false) => (CGEventType::RightMouseUp, CGMouseButton::Right),
+            (MouseButton::Middle, true) => (CGEventType::OtherMouseDown, CGMouseButton::Center),
+            (MouseButton::Middle, false) => (CGEventType::OtherMouseUp, CGMouseButton::Center),
+        };
+        if let Some(event) = macos::mouse_event(kind, at, cg) {
+            macos::set_field(&event, CGEventField::MouseEventClickState, clicks);
+            if button == MouseButton::Middle {
+                macos::set_field(&event, CGEventField::MouseEventButtonNumber, 2);
+            }
+            macos::post_event(&event);
+        }
+    }
+
+    pub fn wheel(units: i32) {
+        let mut s = STATE.lock();
+        s.wheel_carry += units as f64 / 120.0 * PIXELS_PER_NOTCH;
+        let px = s.wheel_carry.trunc();
+        s.wheel_carry -= px;
+        drop(s);
+        if px != 0.0 {
+            if let Some(event) = macos::scroll_event(px as i32) {
+                macos::post_event(&event);
+            }
+        }
+    }
+
+    /// In physical pixels of the display the cursor is on.
+    pub fn cursor() -> Option<(i32, i32)> {
+        let p = macos::cursor_points()?;
+        let scale = macos::displays().iter().find(|d| contains(&d.bounds, p)).map_or(1.0, |d| d.scale);
+        Some(((p.x * scale).round() as i32, (p.y * scale).round() as i32))
+    }
+
+    /// macOS sleeps to the millisecond already.
+    pub fn fine_timer(_: bool) {}
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use crate::engine::MouseButton;
     pub fn move_by(_: i32, _: i32) {}
@@ -323,6 +477,18 @@ mod tests {
         let sum = out.iter().fold((0, 0), |a, s| (a.0 + s.0, a.1 + s.1));
         assert!((19..=20).contains(&sum.0) && (-20..=-19).contains(&sum.1), "{sum:?}");
         assert!(out.iter().all(|s| s.0.abs() <= 1 && s.1.abs() <= 1));
+    }
+
+    #[test]
+    fn glide_lasts_until_the_next_report() {
+        // Windows' link: the setting's 15 ms already covers a report interval.
+        assert_eq!(glide_span(15.0, 68.0), 15.0);
+        // A Mac's link sends half as often; gliding for 15 ms of every 30
+        // would stutter.
+        assert!((glide_span(15.0, 33.3) - 30.0).abs() < 0.1);
+        assert_eq!(glide_span(0.0, 33.3), 0.0, "off stays off");
+        assert_eq!(glide_span(15.0, 0.0), 15.0, "no controller yet");
+        assert_eq!(glide_span(15.0, 5.0), 50.0, "a crawling link is not waited for");
     }
 
     #[test]

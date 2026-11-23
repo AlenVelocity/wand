@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { RecordingInfo, Snapshot } from '../shared/types';
 import { backend } from './api';
+import { isMac } from './platform';
 import { Setting, Switch } from './ui';
 
 const ANCHORS: [string, string][] = [
@@ -77,10 +78,10 @@ export function SettingsPage({ snap, toast }: { snap: Snapshot; toast(text: stri
       )}
 
       <div className="settings">
-        <Setting title="Start with Windows" help="Starts hidden, in the tray.">
-          <Switch checked={snap.autostart} label="Start with Windows" onChange={async (v) => (await backend()).setAutostart(v).catch((e) => toast(String(e)))} />
+        <Setting title={isMac ? 'Open at login' : 'Start with Windows'} help={isMac ? 'Starts hidden, in the menu bar.' : 'Starts hidden, in the tray.'}>
+          <Switch checked={snap.autostart} label={isMac ? 'Open at login' : 'Start with Windows'} onChange={async (v) => (await backend()).setAutostart(v).catch((e) => toast(String(e)))} />
         </Setting>
-        <Setting title="Pause" help="No strokes and no mouse until you turn this off. Also in the tray menu.">
+        <Setting title="Pause" help={`No strokes and no mouse until you turn this off. Also in the ${isMac ? 'menu bar' : 'tray'} menu.`}>
           <Switch checked={snap.mode === 'paused'} label="Pause" onChange={async (v) => void (await backend()).setMode(v ? 'paused' : 'normal')} />
         </Setting>
         <Setting title="Rumble" help="A tick when a gesture matches, a double pulse when it does not.">
@@ -121,13 +122,13 @@ export function SettingsPage({ snap, toast }: { snap: Snapshot; toast(text: stri
           >
             <Switch checked={cfg.mouse.enabled} label="Use it as a mouse" onChange={(v) => void set('mouse', 'enabled', v)} />
           </Setting>
-          <Setting title="Cursor speed" help="Windows applies its own pointer speed on top of this.">
+          <Setting title="Cursor speed" help={isMac ? 'Pixels per count from the sensor. macOS adds no acceleration of its own.' : 'Windows applies its own pointer speed on top of this.'}>
             <Range value={cfg.mouse.sensitivity} min={0.3} max={3} step={0.1} unit="×" digits={1} onCommit={(v) => void set('mouse', 'sensitivity', Number(v.toFixed(1)))} />
           </Setting>
           <Setting title="Scroll speed" help="Wheel notches a second with the stick pushed all the way. 0 turns stick scrolling off.">
             <Range value={cfg.mouse.scroll_speed} min={0} max={40} step={1} unit="/s" onCommit={(v) => void set('mouse', 'scroll_speed', v)} />
           </Setting>
-          <Setting title="Glide" help="The controller reports about 68 times a second. This spreads each report over the frames in between, so the cursor does not hop on a fast display. It adds up to 15 ms of delay.">
+          <Setting title="Glide" help={`The controller reports about ${isMac ? '33' : '68'} times a second. This spreads each report over the frames in between, so the cursor does not hop on a fast display. It adds up to ${isMac ? '30' : '15'} ms of delay.`}>
             <Switch checked={cfg.mouse.smoothing_ms > 0} label="Glide" onChange={(v) => void set('mouse', 'smoothing_ms', v ? 15.0 : 0.0)} />
           </Setting>
         </div>

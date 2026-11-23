@@ -153,8 +153,13 @@ pub fn run(cli: Cli) {
             replay_file,
             replay_gesture,
             replay_stop,
+            request_accessibility,
         ])
         .setup(move |app| {
+            // A menu bar app: no Dock icon, not in Cmd+Tab. The bundle says
+            // so too (LSUIElement); this covers running unbundled.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             setup(app.handle().clone(), cli_for_setup.clone())?;
             Ok(())
         })
@@ -196,6 +201,14 @@ fn setup(handle: AppHandle, cli: Cli) -> anyhow::Result<()> {
     let paths = Paths::new(dir);
     init_logging(&paths);
     log::info!("Wand {} starting, data in {}", env!("CARGO_PKG_VERSION"), paths.dir.display());
+    // Without Accessibility access no key press or cursor movement arrives
+    // anywhere, and macOS says nothing about it. Its own prompt, once a
+    // launch, until access is given; a dry run sends nothing, so needs none.
+    #[cfg(target_os = "macos")]
+    if !cli.dry_run && !crate::macos::accessibility_trusted() {
+        log::info!("no Accessibility access yet; asking for it");
+        crate::macos::prompt_for_accessibility();
+    }
 
     let (mut cfg, config_error) = config::load_or_init(&paths.config());
     if cli.dev {
@@ -403,6 +416,13 @@ fn show_settings(handle: &AppHandle) {
     });
 }
 
+/// macOS: see `macos.rs` for the pixel space the engine and overlays share.
+#[cfg(target_os = "macos")]
+fn read_monitors(_: &AppHandle) -> Vec<Monitor> {
+    crate::macos::monitors()
+}
+
+#[cfg(not(target_os = "macos"))]
 fn read_monitors(handle: &AppHandle) -> Vec<Monitor> {
     let primary = handle.primary_monitor().ok().flatten().map(|m| (m.position().x, m.position().y));
     handle
@@ -456,6 +476,28 @@ fn sync_overlays(state: &Arc<AppState>) {
             .additional_browser_args(BROWSER_ARGS)
             .build();
         match built {
+            #[cfg(target_os = "macos")]
+            Ok(w) => {
+                let _ = w.set_ignore_cursor_events(true);
+                // Placed natively: macOS keeps windows below the menu bar and
+                // off other Spaces unless told otherwise.
+                let s = m.scale as f64;
+                let frame = objc2_core_foundation::CGRect::new(
+                    objc2_core_foundation::CGPoint::new(m.x as f64 / s, m.y as f64 / s),
+                    objc2_core_foundation::CGSize::new(m.w as f64 / s, m.h as f64 / s),
+                );
+                match w.ns_window() {
+                    Ok(ptr) => {
+                        let ptr = ptr as usize;
+                        // SAFETY: the window was just built. Destroying it is
+                        // queued on the main thread too, by a later display
+                        // change, so it runs after this.
+                        let _ = w.run_on_main_thread(move || unsafe { crate::macos::overlay_window(ptr as *mut _, frame) });
+                    }
+                    Err(e) => log::error!("no native window for the overlay on display {i}: {e}"),
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
             Ok(w) => {
                 // Physical placement after creation: the builder works in
                 // logical units of whichever monitor the window opens on.
@@ -518,8 +560,14 @@ fn build_tray(state: &Arc<AppState>) -> anyhow::Result<()> {
     let dev = CheckMenuItem::with_id(h, "dev", "Dev mode (hold key + mouse)", true, state.config.read().dev.enabled, None::<&str>)?;
     let quit = MenuItem::with_id(h, "quit", "Quit Wand", true, None::<&str>)?;
     let menu = Menu::with_items(h, &[&open, &PredefinedMenuItem::separator(h)?, &pause, &dry, &dev, &PredefinedMenuItem::separator(h)?, &quit])?;
-    let mut tray = TrayIconBuilder::with_id("wand").tooltip("Wand").menu(&menu).show_menu_on_left_click(false);
-    if let Some(icon) = h.default_window_icon() {
+    // A Mac menu bar item opens its menu on a click; a Windows tray icon
+    // opens the window and keeps the menu for the right button.
+    let mac = cfg!(target_os = "macos");
+    let mut tray = TrayIconBuilder::with_id("wand").tooltip("Wand").menu(&menu).show_menu_on_left_click(mac);
+    if mac {
+        // A template image: macOS tints it to suit the menu bar.
+        tray = tray.icon(tauri::image::Image::from_bytes(include_bytes!("../icons/tray-macos.png"))?).icon_as_template(true);
+    } else if let Some(icon) = h.default_window_icon() {
         tray = tray.icon(icon.clone());
     }
     let s = state.clone();
@@ -546,8 +594,8 @@ fn build_tray(state: &Arc<AppState>) -> anyhow::Result<()> {
         "quit" => app.exit(0),
         _ => {}
     })
-    .on_tray_icon_event(|tray, event| {
-        if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+    .on_tray_icon_event(move |tray, event| {
+        if let (false, TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. }) = (mac, event) {
             show_settings(tray.app_handle());
         }
     })
@@ -646,6 +694,7 @@ fn watch(state: Arc<AppState>) {
     let stamp = |p: &std::path::Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
     let mut last = stamp(&path);
     let mut ticks = 0u32;
+    let mut trusted = accessibility();
     loop {
         std::thread::sleep(Duration::from_millis(700));
         let now = stamp(&path);
@@ -658,6 +707,13 @@ fn watch(state: Arc<AppState>) {
         ticks += 1;
         if ticks % 4 == 0 {
             sync_overlays(&state);
+            // Granted or taken away in System Settings while the app runs.
+            let now = accessibility();
+            if now != trusted {
+                trusted = now;
+                log::info!("accessibility access: {now:?}");
+                state.changed();
+            }
         }
     }
 }
@@ -694,6 +750,7 @@ impl AppState {
             }
             *current = status.clone();
         }
+        let _ = self.pointer.send(pointer::Cmd::ReportRate(status.report_hz));
         let _ = self.handle.emit_to("settings", "wand://status", status);
     }
 
@@ -834,6 +891,15 @@ struct Snapshot {
     calibration: Calibration,
     media_keys: Vec<(&'static str, &'static str)>,
     monitors: Vec<Monitor>,
+    /// macOS only: whether the app may press keys and move the cursor.
+    accessibility: Option<bool>,
+}
+
+fn accessibility() -> Option<bool> {
+    #[cfg(target_os = "macos")]
+    return Some(crate::macos::accessibility_trusted());
+    #[cfg(not(target_os = "macos"))]
+    None
 }
 
 #[tauri::command]
@@ -860,8 +926,10 @@ fn snapshot(state: State) -> Snapshot {
         replaying: state.replaying.load(Ordering::Relaxed),
         history: state.history.lock().iter().cloned().collect(),
         calibration: Calibration { gyro_bias_dps: pose.gyro_bias_dps, mag_valid: mag.valid, mag_field_ut: mag.field_ut },
-        media_keys: gestures::MEDIA_KEYS.to_vec(),
+        // A Mac has no media stop key.
+        media_keys: gestures::MEDIA_KEYS.iter().copied().filter(|(k, _)| !(cfg!(target_os = "macos") && *k == "stop")).collect(),
         monitors: state.monitors.lock().clone(),
+        accessibility: accessibility(),
     }
 }
 
@@ -1021,19 +1089,36 @@ fn set_autostart(state: State, enabled: bool) -> Result<(), String> {
     use tauri_plugin_autostart::ManagerExt;
     let auto = state.handle.autolaunch();
     let result = if enabled { auto.enable() } else { auto.disable() };
-    result.map_err(|e| format!("Windows would not change the startup entry: {e}"))?;
+    let system = if cfg!(target_os = "macos") { "macOS" } else { "Windows" };
+    result.map_err(|e| format!("{system} would not change the startup entry: {e}"))?;
     state.changed();
     Ok(())
+}
+
+/// macOS: ask for Accessibility access and open its settings pane. Returns
+/// whether the app has it.
+#[tauri::command]
+fn request_accessibility(state: State) -> bool {
+    #[cfg(target_os = "macos")]
+    let trusted = crate::macos::request_accessibility();
+    #[cfg(not(target_os = "macos"))]
+    let trusted = true;
+    state.changed();
+    trusted
 }
 
 #[tauri::command]
 fn open_config(state: State) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
-    state
-        .handle
-        .opener()
-        .open_path(state.paths.config().display().to_string(), None::<&str>)
-        .map_err(|e| e.to_string())
+    let path = state.paths.config().display().to_string();
+    let opened = state.handle.opener().open_path(&path, None::<&str>).map_err(|e| e.to_string());
+    // Many Macs have no app for .toml files; the default text editor will do.
+    #[cfg(target_os = "macos")]
+    if opened.is_err() {
+        let status = std::process::Command::new("/usr/bin/open").args(["-t", &path]).status();
+        return status.map_err(|e| e.to_string()).and_then(|s| if s.success() { Ok(()) } else { opened });
+    }
+    opened
 }
 
 #[tauri::command]

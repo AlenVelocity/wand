@@ -1,8 +1,8 @@
 //! Wand: draw gestures in the air with a Joy-Con 2.
 //!
 //! The first group of modules is pure logic with no I/O and is what the tests
-//! and `wandtool` exercise. The second group talks to Windows, Bluetooth and
-//! Tauri.
+//! and `wandtool` exercise. The second group talks to Windows or macOS,
+//! Bluetooth and Tauri.
 
 pub mod config;
 pub mod engine;
@@ -19,3 +19,5 @@ pub mod actions;
 pub mod app;
 pub mod devmouse;
 pub mod joycon;
+#[cfg(target_os = "macos")]
+pub mod macos;

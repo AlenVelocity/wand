@@ -299,6 +299,11 @@ fn builtin(id: &str, name: &str, rotation: Rotation, action: Action, label: &str
 fn key(keys: &str) -> Action {
     Action::KeyCombo { keys: keys.into() }
 }
+
+/// The Windows binding, or its counterpart on a Mac.
+fn os<'a>(windows: &'a str, mac: &'a str) -> &'a str {
+    if cfg!(target_os = "macos") { mac } else { windows }
+}
 fn media(key: &str, repeat: u8) -> Action {
     Action::MediaKey { key: key.into(), repeat }
 }
@@ -309,17 +314,17 @@ pub fn defaults() -> Library {
     Library {
         version: LIBRARY_VERSION,
         gestures: vec![
-            builtin("circle", "Circle", Free, key("Win+PrintScreen"), "Screenshot", "camera",
+            builtin("circle", "Circle", Free, key(os("Win+PrintScreen", "Cmd+Shift+3")), "Screenshot", "camera",
                 vec![circle(true), circle(false)]),
             // A "/" at 45 degrees, drawn either way: down like a falling blade,
             // or up, the way it tends to be drawn in the air.
-            builtin("slash", "Slash", Bounded, key("Alt+F4"), "Close window", "close",
+            builtin("slash", "Slash", Bounded, key(os("Alt+F4", "Cmd+W")), "Close window", "close",
                 vec![poly(&[[0.5, -0.5], [-0.5, 0.5]]), poly(&[[-0.5, 0.5], [0.5, -0.5]])]),
-            builtin("z", "Z", Bounded, key("Ctrl+Z"), "Undo", "undo",
+            builtin("z", "Z", Bounded, key(os("Ctrl+Z", "Cmd+Z")), "Undo", "undo",
                 vec![poly(&[[-0.5, -0.4], [0.5, -0.4], [-0.5, 0.4], [0.5, 0.4]])]),
             // The V as printed, and as it comes out of a wrist: a tick, with a
             // short first arm.
-            builtin("v", "V", Bounded, key("Ctrl+V"), "Paste", "paste",
+            builtin("v", "V", Bounded, key(os("Ctrl+V", "Cmd+V")), "Paste", "paste",
                 vec![poly(&[[-0.42, -0.5], [0.0, 0.5], [0.42, -0.5]]), poly(&[[-0.3, -0.05], [-0.05, 0.5], [0.42, -0.5]])]),
             builtin("flick-up", "Flick up", Bounded, media("volume_up", 3), "Volume up", "volume-up",
                 vec![poly(&[[0.0, 0.5], [0.0, -0.5]])]),
@@ -332,15 +337,15 @@ pub fn defaults() -> Library {
             builtin("chevron", "Chevron", Bounded, media("play_pause", 1), "Play / pause", "play",
                 vec![poly(&[[-0.3, -0.5], [0.3, 0.0], [-0.3, 0.5]])]),
             // Up and over: the V's opposite, and its opposite number.
-            builtin("caret", "Caret", Bounded, key("Ctrl+C"), "Copy", "copy",
+            builtin("caret", "Caret", Bounded, key(os("Ctrl+C", "Cmd+C")), "Copy", "copy",
                 vec![poly(&[[-0.42, 0.5], [0.0, -0.5], [0.42, 0.5]])]),
-            builtin("infinity", "Infinity", Bounded, key("Alt+Tab"), "Switch window", "switch",
+            builtin("infinity", "Infinity", Bounded, key(os("Alt+Tab", "Cmd+Tab")), os("Switch window", "Switch app"), "switch",
                 vec![infinity(1.0, -1.0), infinity(-1.0, -1.0), infinity(1.0, 1.0), infinity(-1.0, 1.0)]),
-            builtin("star", "Star", Free, key("Win+Tab"), "Task view", "windows",
+            builtin("star", "Star", Free, key(os("Win+Tab", "Ctrl+Up")), os("Task view", "Mission Control"), "windows",
                 vec![star(true), star(false)]),
             builtin("m", "M", Bounded, media("mute", 1), "Mute", "mute",
                 vec![poly(&[[-0.5, 0.5], [-0.28, -0.5], [0.0, 0.2], [0.28, -0.5], [0.5, 0.5]])]),
-            builtin("s", "S", Bounded, key("Ctrl+S"), "Save", "save",
+            builtin("s", "S", Bounded, key(os("Ctrl+S", "Cmd+S")), "Save", "save",
                 vec![s_curve()]),
         ],
     }

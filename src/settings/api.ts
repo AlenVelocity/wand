@@ -32,6 +32,7 @@ export interface Backend {
   replayFile(path: string, runActions: boolean): Promise<void>;
   replayGesture(id: string): Promise<void>;
   replayStop(): Promise<void>;
+  requestAccessibility(): Promise<boolean>;
   subscribePose(onPose: (pose: Pose) => void): Promise<Unlisten>;
   on<T>(event: string, handler: (payload: T) => void): Promise<Unlisten>;
 }
@@ -60,6 +61,7 @@ async function tauriBackend(): Promise<Backend> {
     replayFile: (path, runActions) => invoke('replay_file', { path, runActions }),
     replayGesture: (id) => invoke('replay_gesture', { id }),
     replayStop: () => invoke('replay_stop'),
+    requestAccessibility: () => invoke('request_accessibility'),
     subscribePose: async (onPose) => {
       const channel = new Channel<Pose>();
       channel.onmessage = onPose;
@@ -134,6 +136,7 @@ function mockBackend(): Backend {
       history, calibration: { gyro_bias_dps: [0.42, -0.81, 0.17], mag_valid: q.get('mag') !== '0', mag_field_ut: 47.2 },
       media_keys: [['volume_up', 'Volume up'], ['volume_down', 'Volume down'], ['mute', 'Mute'], ['play_pause', 'Play / pause'], ['next_track', 'Next track'], ['prev_track', 'Previous track'], ['stop', 'Stop']],
       monitors: [],
+      accessibility: q.get('access') === '0' ? false : null,
     }),
     setMode: async (m) => {
       mode = m;
@@ -186,6 +189,7 @@ function mockBackend(): Backend {
     replayFile: async () => {},
     replayGesture: async () => {},
     replayStop: async () => {},
+    requestAccessibility: async () => false,
     subscribePose: async (onPose) => {
       // A slow, wrist-like wobble so the 3D preview has something to show.
       const t0 = performance.now();

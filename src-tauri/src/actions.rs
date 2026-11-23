@@ -25,9 +25,10 @@ fn named_key(name: &str) -> Option<Key> {
         "rightctrl" | "controlright" => e(0xA3),
         "shift" | "leftshift" | "shiftleft" => k(0x10),
         "rightshift" | "shiftright" => k(0xA1),
-        "alt" | "leftalt" | "altleft" => k(0x12),
-        "rightalt" | "altright" | "altgr" => e(0xA5),
-        "win" | "super" | "meta" | "cmd" | "windows" | "metaleft" | "metaright" => e(0x5B),
+        "alt" | "leftalt" | "altleft" | "option" | "opt" | "leftoption" => k(0x12),
+        "rightalt" | "altright" | "altgr" | "rightoption" => e(0xA5),
+        "win" | "super" | "meta" | "cmd" | "command" | "windows" | "metaleft" | "metaright" => e(0x5B),
+        "rightwin" | "rightcmd" | "rightcommand" => e(0x5C),
         "enter" | "return" => k(0x0D),
         "esc" | "escape" => k(0x1B),
         "space" | "spacebar" => k(0x20),
@@ -142,7 +143,10 @@ pub fn validate(action: &Action) -> Result<(), String> {
     match action {
         Action::KeyCombo { keys } => parse_combo(keys).map(|_| ()),
         Action::MediaKey { key, repeat } => {
-            media_key(key).ok_or_else(|| format!("\"{key}\" is not a media key."))?;
+            let media = media_key(key).ok_or_else(|| format!("\"{key}\" is not a media key."))?;
+            if cfg!(target_os = "macos") && media.vk == 0xB2 {
+                return Err("A Mac has no media stop key. Use play / pause.".into());
+            }
             if !(1..=20).contains(repeat) {
                 return Err("Repeat must be between 1 and 20.".into());
             }
@@ -292,7 +296,121 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::Key;
+    use crate::macos;
+    use std::process::{Command, Stdio};
+
+    /// Alt+F4's Shut Down dialog is a Windows matter.
+    pub fn shell_is_in_front() -> bool {
+        false
+    }
+
+    pub fn send_keys(keys: &[Key]) -> Result<(), String> {
+        // A Mac sends media keys as their own kind of event, not as key codes.
+        if let Some(media) = keys.iter().find(|k| macos::is_media(k.vk)) {
+            let code = macos::media_code(media.vk).ok_or("A Mac has no media stop key.")?;
+            return macos::send_media(code);
+        }
+        let codes = keys
+            .iter()
+            .map(|k| macos::key_code(k.vk).ok_or("One of these keys is not on a Mac keyboard."))
+            .collect::<Result<Vec<u16>, _>>()?;
+        macos::send_key_codes(&codes)
+    }
+
+    /// An app, a file, a folder or a URL opens the way a double click would.
+    /// A program file (anything executable that is not an app bundle) runs
+    /// directly with the arguments.
+    pub fn open(path: &str, args: &str) -> Result<(), String> {
+        use std::os::unix::fs::PermissionsExt;
+        let (path, args) = (path.trim(), split_args(args));
+        let p = std::path::Path::new(path);
+        let program = p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+        if program {
+            return quiet(Command::new(p).args(&args)).spawn().map(|_| ()).map_err(|e| format!("Could not run {path}: {e}"));
+        }
+        let mut cmd = Command::new("/usr/bin/open");
+        cmd.arg(path);
+        // Arguments only reach an app; a document has nowhere to put them.
+        if !args.is_empty() && path.trim_end_matches('/').ends_with(".app") {
+            cmd.arg("--args").args(&args);
+        }
+        let out = cmd.stdin(Stdio::null()).output().map_err(|e| format!("Could not open {path}: {e}"))?;
+        if !out.status.success() {
+            let why = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(if why.is_empty() { format!("macOS could not open {path}.") } else { why });
+        }
+        Ok(())
+    }
+
+    /// The command runs in a login shell, so PATH holds what the user's
+    /// profile adds (Homebrew and the like). An app started from Finder or at
+    /// login gets only the system's.
+    pub fn shell(shell: &str, command: &str) -> Result<(), String> {
+        let mut cmd = match shell.trim().to_ascii_lowercase().as_str() {
+            "sh" => Command::new("/bin/sh"),
+            "bash" => {
+                let mut c = Command::new("/bin/bash");
+                c.arg("-l");
+                c
+            }
+            // "zsh", and "cmd" or "powershell" in a file brought over from Windows.
+            _ => {
+                let mut c = Command::new("/bin/zsh");
+                c.arg("-l");
+                c
+            }
+        };
+        cmd.arg("-c").arg(command);
+        quiet(&mut cmd).spawn().map(|_| ()).map_err(|e| format!("Could not start the command: {e}"))
+    }
+
+    fn quiet(cmd: &mut Command) -> &mut Command {
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+    }
+
+    /// Split an argument line the way a shell would, minus everything but
+    /// quotes: `-a "two words" 'x y'` is three arguments.
+    pub fn split_args(line: &str) -> Vec<String> {
+        let (mut out, mut cur) = (Vec::new(), String::new());
+        let (mut quote, mut started) = (None, false);
+        for c in line.chars() {
+            match quote {
+                Some(q) if c == q => quote = None,
+                Some(_) => cur.push(c),
+                None if c == '"' || c == '\'' => {
+                    quote = Some(c);
+                    started = true;
+                }
+                None if c.is_whitespace() => {
+                    if started || !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                        started = false;
+                    }
+                }
+                None => cur.push(c),
+            }
+        }
+        if started || !cur.is_empty() {
+            out.push(cur);
+        }
+        out
+    }
+
+    #[cfg(test)]
+    mod tests {
+        #[test]
+        fn argument_lines() {
+            assert_eq!(super::split_args(""), Vec::<String>::new());
+            assert_eq!(super::split_args("  -a  b "), ["-a", "b"]);
+            assert_eq!(super::split_args(r#"--name "two words" 'x y' """#), ["--name", "two words", "x y", ""]);
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     use super::Key;
     pub fn shell_is_in_front() -> bool {
@@ -300,13 +418,13 @@ mod platform {
     }
 
     pub fn send_keys(_: &[Key]) -> Result<(), String> {
-        Err("Key presses are only implemented on Windows.".into())
+        Err("Key presses are only implemented on Windows and macOS.".into())
     }
     pub fn open(_: &str, _: &str) -> Result<(), String> {
-        Err("Opening is only implemented on Windows.".into())
+        Err("Opening is only implemented on Windows and macOS.".into())
     }
     pub fn shell(_: &str, _: &str) -> Result<(), String> {
-        Err("Shell commands are only implemented on Windows.".into())
+        Err("Shell commands are only implemented on Windows and macOS.".into())
     }
 }
 
@@ -336,6 +454,9 @@ mod tests {
         assert!(parse_combo("").is_err());
         assert!(parse_combo("F25").is_err());
         assert!(parse_combo("Win+PrintScreen").unwrap()[1].extended);
+        // What a Mac keyboard calls them.
+        assert_eq!(vks("Cmd+Shift+3"), [0x5B, 0x10, 0x33]);
+        assert_eq!(vks("Option+Command+Esc"), [0x12, 0x5B, 0x1B]);
     }
 
     #[test]

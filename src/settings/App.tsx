@@ -104,6 +104,15 @@ export function App() {
       </aside>
 
       <main className="page" key={page}>
+        {snap.accessibility === false && (
+          <div className="banner">
+            <b>Needs Accessibility</b>
+            <span>macOS stops Wand pressing keys and moving the cursor until you allow it under Privacy &amp; Security &gt; Accessibility. Gestures are recognised but do nothing.</span>
+            <button type="button" className="btn small" onClick={async () => void (await backend()).requestAccessibility()}>
+              Allow
+            </button>
+          </div>
+        )}
         {page === 'gestures' && <Gestures snap={snap} />}
         {page === 'device' && <Device snap={snap} toast={toast} />}
         {page === 'settings' && <SettingsPage snap={snap} toast={toast} />}

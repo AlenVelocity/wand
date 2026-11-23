@@ -102,7 +102,22 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use crate::macos;
+
+    pub fn key_down(vk: u16) -> bool {
+        macos::key_code(vk).is_some_and(macos::key_down)
+    }
+
+    pub fn cursor() -> Option<(f32, f32)> {
+        macos::cursor_units()
+    }
+
+    pub fn fine_timer(_: bool) {}
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     pub fn key_down(_: u16) -> bool {
         false

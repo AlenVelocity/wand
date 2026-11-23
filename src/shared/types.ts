@@ -172,6 +172,8 @@ export interface Snapshot {
   calibration: { gyro_bias_dps: [number, number, number]; mag_valid: boolean; mag_field_ut: number };
   media_keys: [string, string][];
   monitors: Monitor[];
+  /** macOS only: whether the app may press keys and move the cursor. */
+  accessibility: boolean | null;
 }
 
 export interface RecordingCheck {
