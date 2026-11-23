@@ -6,17 +6,19 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#000000" />
     <title>Wand: draw in the air with a Joy-Con</title>
-    <meta name="description" content="Wand turns a Switch 2 Joy-Con into a wand for Windows. Hold ZR, draw a shape in the air, and a shortcut, media key or program runs." />
+    <meta name="description" content="Wand turns a Switch 2 Joy-Con into a wand for Windows. Hold ZR, draw a shape in the air, and a shortcut, media key or program runs. On a desk, it is a mouse." />
     <link rel="canonical" href="https://wand.alen.is/" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://wand.alen.is/" />
     <meta property="og:title" content="Wand: draw in the air with a Joy-Con" />
-    <meta property="og:description" content="Hold ZR on a Switch 2 Joy-Con, draw a shape in the air, and your Windows PC runs a shortcut." />
-    <meta property="og:image" content="https://wand.alen.is/og.png" />
+    <meta property="og:description" content="Hold ZR on a Switch 2 Joy-Con, draw a shape in the air, and your Windows PC runs a shortcut. On a desk, it is a mouse." />
+    <meta property="og:image" content="https://wand.alen.is/og.png?v=2" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
+    <!-- In the head, so the page is never painted without it. -->
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <header class="top wrap">
@@ -34,11 +36,11 @@
           <h1>Draw in the air<br />with a <span>Joy-Con.</span></h1>
           <p class="lede">
             Wand turns a Switch 2 Joy-Con into a wand for your Windows PC. Hold ZR, draw a shape, let go. A circle takes a screenshot, a flick skips the track,
-            a Z undoes.
+            a Z undoes. Lay it on the desk and it is a mouse.
           </p>
           <div class="cta">
             <a class="button" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download for Windows</a>
-            <span class="meta">__VERSION__ · 3.1 MB · Windows 11</span>
+            <span class="meta">__VERSION__ · 3.2 MB · Windows 11</span>
           </div>
         </div>
 
@@ -66,6 +68,38 @@
         <noscript><p class="note">The list of gestures is in the README on GitHub.</p></noscript>
       </section>
 
+      <section class="mouse wrap" id="mouse">
+        <div class="section-head">
+          <h2>Set it down and it is a mouse</h2>
+          <p>
+            A Joy-Con 2 has an optical sensor in its rail. Lay the controller on its side with the rail down and it moves the cursor. Lift it and the same
+            buttons are the wand's again, so you can draw an infinity to bring up your open windows, then set it down and click the one you want.
+          </p>
+        </div>
+        <dl class="keys">
+          <div>
+            <dt>R</dt>
+            <dd>Left click</dd>
+          </div>
+          <div>
+            <dt>ZR</dt>
+            <dd>Right click</dd>
+          </div>
+          <div>
+            <dt>Stick click</dt>
+            <dd>Middle click</dd>
+          </div>
+          <div>
+            <dt>Stick</dt>
+            <dd>Scroll</dd>
+          </div>
+        </dl>
+        <p class="note">
+          On a left Joy-Con the two buttons are L and ZL. So far it has only been tried on a desk. A rougher surface, such as cloth, may need a looser
+          limit, which is one line in the settings file.
+        </p>
+      </section>
+
       <section class="made wrap" id="made">
         <h2>What it is made of</h2>
         <dl>
@@ -76,6 +110,14 @@
           <div>
             <dt>Motion</dt>
             <dd>Gyro, accelerometer and magnetometer, fused into one orientation about 68 times a second.</dd>
+          </div>
+          <div>
+            <dt>Mouse</dt>
+            <dd>
+              The optical sensor in the rail. The controller counts as set down when the sensor sees a surface close by and the rail faces the floor, so a
+              hand wrapped around it does not move the cursor. Each report's movement is spread over the next 15 ms, so the cursor moves on every frame of a
+              fast display.
+            </dd>
           </div>
           <div>
             <dt>Overlay</dt>

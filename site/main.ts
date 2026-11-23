@@ -2,9 +2,9 @@
 // canvas fixed over the whole page, fed by the mouse or a finger instead of a
 // Joy-Con. Strokes are matched by a browser port of the app's recogniser.
 
-import '@fontsource-variable/dm-sans/wght.css';
-import '@fontsource/dm-mono/400.css';
-import './styles.css';
+// The stylesheet and the fonts are linked from index.html, not imported here:
+// a stylesheet that arrives with the script arrives after the first paint.
+
 import { perform } from '../src/overlay/demo';
 import { LABEL_CSS } from '../src/overlay/label';
 import { Overlay } from '../src/overlay/overlay';

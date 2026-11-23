@@ -18,6 +18,26 @@ export default defineConfig({
       transformIndexHtml: { order: 'pre', handler: (html) => html.replaceAll('__VERSION__', version) },
     },
     {
+      // The two fonts the first screen is set in are fetched alongside the
+      // stylesheet instead of after it, so the text is not drawn in a
+      // fallback face first.
+      name: 'wand-preload-fonts',
+      apply: 'build',
+      transformIndexHtml: {
+        order: 'post',
+        handler(_html, ctx) {
+          const first = [/dm-sans-latin-wght-normal-[^/]*.woff2$/, /dm-mono-latin-400-normal-[^/]*.woff2$/];
+          return Object.keys(ctx.bundle ?? {})
+            .filter((file) => first.some((re) => re.test(file)))
+            .map((file) => ({
+              tag: 'link',
+              attrs: { rel: 'preload', as: 'font', type: 'font/woff2', href: `/${file}`, crossorigin: true },
+              injectTo: 'head' as const,
+            }));
+        },
+      },
+    },
+    {
       // Development only: /og.html renders the link-preview card and posts it
       // here to be saved as public/og.png. The header and the origin check
       // keep any other page open in the browser from writing to it.

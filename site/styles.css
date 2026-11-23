@@ -8,6 +8,9 @@
   Grouped with space and hairlines. No panels, blur, gradients or second accent.
 */
 
+@import '@fontsource-variable/dm-sans/wght.css';
+@import '@fontsource/dm-mono/400.css';
+
 :root {
   --black: #000;
   --ink: #f4f3f0;
@@ -307,6 +310,7 @@ footer::before {
 }
 
 .gestures,
+.mouse,
 .made,
 .setup {
   padding-block: clamp(64px, 11vh, 128px);
@@ -421,6 +425,38 @@ footer::before {
   margin-top: 2px;
   color: var(--ink-faint);
   font: 400 12px/1.3 var(--mono);
+}
+
+/* ------------------------------------------------------------------- mouse */
+
+/* Four buttons, set as the keys they are. Two across on a phone. */
+.keys {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 28px 24px;
+  margin-top: clamp(28px, 5vh, 52px);
+}
+
+.keys div {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.keys dt {
+  font: 400 clamp(21px, 2.4vw, 30px) / 1.15 var(--mono);
+  letter-spacing: -0.02em;
+}
+
+.keys dd {
+  margin-top: 6px;
+  color: var(--ink-muted);
+  font-size: 16px;
+}
+
+.mouse .note {
+  max-width: 44em;
+  margin-top: clamp(24px, 4vh, 36px);
+  font-size: 15px;
 }
 
 /* -------------------------------------------------------------------- made */
@@ -555,6 +591,11 @@ footer {
 
   .made dl div {
     grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .keys {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    column-gap: 32px;
   }
 
   .setup ol {
