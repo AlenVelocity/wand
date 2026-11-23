@@ -46,7 +46,8 @@ impl Default for SynthOptions {
         SynthOptions {
             rate_hz: 125.0,
             size_px: 700.0,
-            px_per_degree: 42.0,
+            // The hand draws for the app as it ships.
+            px_per_degree: crate::config::Config::default().pointing.px_per_degree,
             duration_s: 0.7,
             aim_yaw_deg: 25.0,
             aim_pitch_deg: 8.0,
@@ -336,8 +337,8 @@ mod tests {
         let a = stroke_reports(&ideal("flick-right", 0), &o, 0, 0);
         let (t_end, c_end) = (a.last().unwrap().0 + 8000, a.len() as u32);
         feed(&mut e, &a);
-        // Second stroke begins 500 px / 42 px-per-degree further right in yaw.
-        let o2 = SynthOptions { aim_yaw_deg: o.aim_yaw_deg - 500.0 / 42.0, lead_in_s: 0.3, ..o.clone() };
+        // Second stroke begins 500 px further right, in degrees of yaw.
+        let o2 = SynthOptions { aim_yaw_deg: o.aim_yaw_deg - 500.0 / o.px_per_degree, lead_in_s: 0.3, ..o.clone() };
         feed(&mut e, &stroke_reports(&ideal("flick-down", 0), &o2, c_end, t_end));
         let s = seen.lock().unwrap();
         assert_eq!(s.fired, vec!["flick-right", "flick-down"]);

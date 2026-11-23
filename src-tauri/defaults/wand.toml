@@ -42,9 +42,10 @@ max_duration_ms = 6000
 triggers = ["ZR", "ZL"]
 
 [pointing]
-# Screen pixels per degree of wand rotation. 42 makes a 20 degree flick of the
-# wrist about 840 pixels long.
-px_per_degree = 42.0
+# Screen pixels per degree of wand rotation. 24 makes a 30 degree sweep of the
+# wrist about 720 pixels long. Strokes drawn with a real controller span 20 to
+# 60 degrees; at 42 they ran off a 1440p screen.
+px_per_degree = 24.0
 # Where the ember appears when you press the trigger:
 #   "pointing"  where the wand aims, relative to the last Recentre
 #   "cursor"    at the mouse cursor
@@ -65,6 +66,45 @@ recenter_buttons = ["R_STICK", "L_STICK"]
 # beta follows fast motion more tightly.
 smoothing_min_cutoff_hz = 9.0
 smoothing_beta = 0.035
+
+[mouse]
+# Lay the Joy-Con on its side, rail down, and it is a mouse: the optical sensor
+# in the rail moves the cursor. Lift it and it is a wand again.
+enabled = true
+# Cursor pixels per count from the sensor. Windows applies its own pointer
+# speed on top.
+sensitivity = 1.0
+# The controller reports about 68 times a second. Each report's movement is
+# spread over this many milliseconds so the cursor moves on every frame of a
+# fast display. 0 sends each report as one jump.
+smoothing_ms = 15.0
+# Flip an axis if the cursor moves against your hand.
+invert_x = false
+invert_y = false
+# What the buttons do while the controller is on a surface. In the air they
+# keep their usual jobs.
+left_buttons = ["R", "L"]
+right_buttons = ["ZR", "ZL"]
+middle_buttons = ["R_STICK", "L_STICK"]
+# The stick scrolls: wheel notches a second with the stick pushed all the way.
+# 0 turns scrolling off.
+scroll_speed = 18.0
+# Fraction of the stick's travel around its centre that does nothing.
+scroll_deadzone = 0.22
+invert_scroll = false
+# The controller counts as on a surface while the sensor's distance reading is
+# above zero and below max_distance, its roughness reading is below
+# max_roughness, and the rail faces within max_tilt_deg of straight down (a
+# hand wrapped around the rail is not a desk). The Device page shows all three
+# readings live.
+max_distance = 1000
+max_roughness = 4000
+max_tilt_deg = 50.0
+# The surface must be seen for this long before the cursor starts to follow.
+settle_ms = 90
+# Buttons keep their mouse jobs this long after a lift, so picking the
+# controller up to reposition it does not turn a click into a stroke.
+linger_ms = 500
 
 [fusion]
 # Use the magnetometer to hold yaw. Needs the calibration on the Device page.

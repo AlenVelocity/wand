@@ -76,7 +76,9 @@ export interface DeviceStatus {
   charging: boolean;
   body_color: string;
   button_color: string;
+  accent_color: string;
   has_magnetometer: boolean;
+  has_mouse: boolean;
   interval_ms: number | null;
   report_hz: number;
   detail: string;
@@ -96,12 +98,27 @@ export interface Outcome {
   points: number;
 }
 
+/** The optical sensor in the rail, as the engine reads it. */
+export interface Surface {
+  /** The buttons are mouse buttons right now. */
+  active: boolean;
+  /** The cursor is following the sensor right now. */
+  tracking: boolean;
+  /** The sensor alone says there is a surface, whichever way the rail faces. */
+  seen: boolean;
+  distance: number;
+  roughness: number;
+  /** How far the rail is from facing straight down, in degrees. */
+  tilt_deg: number;
+}
+
 export interface Pose {
   q: [number, number, number, number];
   stationary: boolean;
   mag_in_use: boolean;
   report_hz: number;
   gyro_bias_dps: [number, number, number];
+  surface: Surface;
 }
 
 export interface Config {
@@ -118,6 +135,15 @@ export interface Config {
     recenter_buttons: string[];
     smoothing_min_cutoff_hz: number;
     smoothing_beta: number;
+  };
+  mouse: {
+    enabled: boolean;
+    sensitivity: number;
+    smoothing_ms: number;
+    scroll_speed: number;
+    max_distance: number;
+    max_roughness: number;
+    max_tilt_deg: number;
   };
   fusion: { use_magnetometer: boolean };
   overlay: OverlayCfg;

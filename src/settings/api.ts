@@ -102,18 +102,19 @@ function mockBackend(): Backend {
   (window as unknown as { __wandEmit: typeof emit }).__wandEmit = emit;
   const status: DeviceStatus = connected
     ? {
-        state: 'connected', name: 'Joy-Con 2 (R)', side: 'right', serial: 'HEJ70012345678', battery_percent: 82, battery_mv: 3980,
-        charging: false, body_color: '#e6392e', button_color: '#1e1e1e', has_magnetometer: true, interval_ms: 15, report_hz: 66, detail: 'Connected.',
+        state: 'connected', name: q.get('side') === 'left' ? 'Joy-Con 2 (L)' : 'Joy-Con 2 (R)', side: q.get('side') === 'left' ? 'left' : 'right', serial: 'HEJ70012345678', battery_percent: 82, battery_mv: 3980,
+        charging: false, body_color: '#2d2f33', button_color: '#1e1e1e', accent_color: q.get('side') === 'left' ? '#3ec1ea' : '#ff5a4d', has_magnetometer: true, has_mouse: true, interval_ms: 15, report_hz: 66, detail: 'Connected.',
       }
     : {
-        state: 'searching', name: '', side: '', serial: '', battery_percent: null, battery_mv: 0, charging: false, body_color: '', button_color: '',
-        has_magnetometer: false, interval_ms: null, report_hz: 0,
+        state: 'searching', name: '', side: '', serial: '', battery_percent: null, battery_mv: 0, charging: false, body_color: '', button_color: '', accent_color: '',
+        has_magnetometer: false, has_mouse: false, interval_ms: null, report_hz: 0,
         detail: "Hold the small sync button on the Joy-Con's rail until its lights chase. A controller already paired with this PC reconnects when you press any button.",
       };
   const config = {
     recognizer: { min_score: 0.8, min_margin: 0.04, resample_points: 64, rotation_tolerance_deg: 12, scale_tolerance: 0.2 },
     stroke: { min_length_px: 90, min_duration_ms: 60, max_duration_ms: 6000, triggers: ['ZR', 'ZL'] },
     pointing: { px_per_degree: 42, anchor: 'pointing', edge_margin_px: 120, forward_axis: '+y', up_axis: '+z', invert_x: false, invert_y: false, recenter_buttons: ['R_STICK', 'L_STICK'], smoothing_min_cutoff_hz: 9, smoothing_beta: 0.035 },
+    mouse: { enabled: true, sensitivity: 1, smoothing_ms: 15, scroll_speed: 18, max_distance: 1000, max_roughness: 4000, max_tilt_deg: 50 },
     fusion: { use_magnetometer: true },
     overlay: { prediction_ms: 10, prediction_mouse_ms: 4, confirm_ms: 400, tail_fade_ms: 850, tail_floor: 0.28, width_min_px: 1.3, width_max_px: 4.6, speed_full_px_s: 3600, spark_rate: 1 },
     rumble: { enabled: true },
@@ -128,7 +129,7 @@ function mockBackend(): Backend {
   let autostart = false;
   return {
     snapshot: async () => ({
-      version: '0.1.0', config, config_error: null, library_error: null, config_path: 'C:\\Users\\you\\AppData\\Roaming\\app.wand.desktop\\wand.toml',
+      version: '0.2.0', config, config_error: null, library_error: null, config_path: 'C:\\Users\\you\\AppData\\Roaming\\app.wand.desktop\\wand.toml',
       data_dir: 'C:\\Users\\you\\AppData\\Roaming\\app.wand.desktop', library, status, mode, autostart, dry_run: false, imu_recording: null, replaying: false,
       history, calibration: { gyro_bias_dps: [0.42, -0.81, 0.17], mag_valid: q.get('mag') !== '0', mag_field_ut: 47.2 },
       media_keys: [['volume_up', 'Volume up'], ['volume_down', 'Volume down'], ['mute', 'Mute'], ['play_pause', 'Play / pause'], ['next_track', 'Next track'], ['prev_track', 'Previous track'], ['stop', 'Stop']],
@@ -188,6 +189,7 @@ function mockBackend(): Backend {
     subscribePose: async (onPose) => {
       // A slow, wrist-like wobble so the 3D preview has something to show.
       const t0 = performance.now();
+      const q0 = new URLSearchParams(location.search);
       const id = window.setInterval(() => {
         const t = (performance.now() - t0) / 1000;
         const yaw = 0.35 * Math.sin(t * 0.7);
@@ -205,7 +207,12 @@ function mockBackend(): Backend {
           w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
         });
         const q = mul(az, mul(ax, ay));
-        onPose({ q: [q.x, q.y, q.z, q.w], stationary: false, mag_in_use: true, report_hz: 66, gyro_bias_dps: [0.42, -0.81, 0.17] });
+        // Set down for four seconds, picked up for four.
+        const down = q0.get('surface') === '1' || (q0.get('surface') !== '0' && t % 8 > 4);
+        const surface = down
+          ? { active: true, tracking: true, seen: true, distance: 312, roughness: 1180, tilt_deg: 3 }
+          : { active: false, tracking: false, seen: false, distance: 2600, roughness: 5400, tilt_deg: 74 };
+        onPose({ q: [q.x, q.y, q.z, q.w], stationary: false, mag_in_use: true, report_hz: 66, gyro_bias_dps: [0.42, -0.81, 0.17], surface });
       }, 16);
       return () => window.clearInterval(id);
     },

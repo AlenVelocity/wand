@@ -154,6 +154,13 @@ pub fn validate(action: &Action) -> Result<(), String> {
     }
 }
 
+/// Alt+F4 and nothing else, whichever Alt it is.
+fn is_close_window(combo: &[Key]) -> bool {
+    const F4: u16 = 0x73;
+    let alt = |k: &Key| matches!(k.vk, 0x12 | 0xA4 | 0xA5);
+    combo.len() == 2 && combo.iter().any(alt) && combo.iter().any(|k| k.vk == F4)
+}
+
 #[derive(Clone, Debug)]
 pub struct RunOptions {
     pub dry_run: bool,
@@ -174,7 +181,15 @@ pub fn run(action: &Action, opts: &RunOptions) -> Result<String, String> {
         return Ok(format!("dry run: {what}"));
     }
     match action {
-        Action::KeyCombo { keys } => platform::send_keys(&parse_combo(keys)?)?,
+        Action::KeyCombo { keys } => {
+            let combo = parse_combo(keys)?;
+            // Alt+F4 with only the desktop or the taskbar in front does not
+            // close a window: Windows answers it with the Shut Down dialog.
+            if is_close_window(&combo) && platform::shell_is_in_front() {
+                return Ok(format!("skipped {what}: no window is in front"));
+            }
+            platform::send_keys(&combo)?
+        }
         Action::MediaKey { key, repeat } => {
             let key = media_key(key).unwrap();
             for i in 0..*repeat {
@@ -200,7 +215,16 @@ mod platform {
         KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY,
     };
     use windows::Win32::UI::Shell::ShellExecuteW;
-    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetForegroundWindow, SW_SHOWNORMAL};
+
+    /// True when the foreground window is the desktop or a taskbar, not a
+    /// program's window.
+    pub fn shell_is_in_front() -> bool {
+        let mut name = [0u16; 64];
+        let len = unsafe { GetClassNameW(GetForegroundWindow(), &mut name) };
+        let class = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+        matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd")
+    }
 
     fn input(key: Key, up: bool) -> INPUT {
         let mut flags = KEYBD_EVENT_FLAGS(0);
@@ -271,6 +295,10 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use super::Key;
+    pub fn shell_is_in_front() -> bool {
+        false
+    }
+
     pub fn send_keys(_: &[Key]) -> Result<(), String> {
         Err("Key presses are only implemented on Windows.".into())
     }
@@ -324,6 +352,16 @@ mod tests {
         assert!(validate(&Action::Launch { path: "  ".into(), args: String::new() }).is_err());
         assert!(validate(&Action::Shell { command: String::new() }).is_err());
         assert!(validate(&Action::None).is_ok());
+    }
+
+    #[test]
+    fn only_plain_alt_f4_counts_as_close_window() {
+        let combo = |s: &str| parse_combo(s).unwrap();
+        assert!(is_close_window(&combo("Alt+F4")));
+        assert!(is_close_window(&combo("RightAlt+F4")));
+        assert!(!is_close_window(&combo("Ctrl+Alt+F4")));
+        assert!(!is_close_window(&combo("Alt+F5")));
+        assert!(!is_close_window(&combo("Ctrl+W")));
     }
 
     #[test]

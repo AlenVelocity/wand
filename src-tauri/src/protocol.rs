@@ -38,6 +38,7 @@ pub const SUB_VIBRATION_SAMPLE: u8 = 0x02;
 pub const CMD_FEATURE: u8 = 0x0C;
 pub const SUB_FEATURE_SET_MASK: u8 = 0x02;
 pub const SUB_FEATURE_ENABLE: u8 = 0x04;
+pub const SUB_FEATURE_DISABLE: u8 = 0x05;
 pub const CMD_PAIR: u8 = 0x15;
 pub const SUB_PAIR_ADDRESSES: u8 = 0x01;
 pub const SUB_PAIR_CONFIRM: u8 = 0x02;
@@ -217,6 +218,10 @@ pub fn cmd_enable_features(flags: u8) -> Vec<u8> {
     command(CMD_FEATURE, SUB_FEATURE_ENABLE, &[flags, 0, 0, 0])
 }
 
+pub fn cmd_disable_features(flags: u8) -> Vec<u8> {
+    command(CMD_FEATURE, SUB_FEATURE_DISABLE, &[flags, 0, 0, 0])
+}
+
 /// Player LED bit pattern (bit 0 = LED 1).
 pub fn cmd_set_leds(pattern: u8) -> Vec<u8> {
     command(CMD_LEDS, SUB_LEDS_PATTERN, &[pattern, 0, 0, 0, 0, 0, 0, 0])
@@ -234,6 +239,23 @@ pub struct ControllerInfo {
     /// Body and button colours, RGB.
     pub body_color: [u8; 3],
     pub button_color: [u8; 3],
+    /// All four colours the controller stores, in order. The first two are
+    /// the body and the buttons; what the other two are for is not documented.
+    pub colors: [[u8; 3]; 4],
+}
+
+impl ControllerInfo {
+    /// The controller's one bright colour: on a Joy-Con 2, the rail and the
+    /// ring under the stick. Which of the four stored colours holds it is not
+    /// documented, so this takes the most saturated one, and falls back to
+    /// the button colour on a controller that has none.
+    pub fn accent_color(&self) -> [u8; 3] {
+        let chroma = |c: &[u8; 3]| c.iter().max().unwrap() - c.iter().min().unwrap();
+        match self.colors.iter().max_by_key(|c| chroma(c)) {
+            Some(c) if chroma(c) >= 40 => *c,
+            _ => self.button_color,
+        }
+    }
 }
 
 /// Decode the 0x40 bytes at `ADDR_CONTROLLER_INFO`.
@@ -242,12 +264,14 @@ pub fn parse_controller_info(d: &[u8]) -> Option<ControllerInfo> {
         return None;
     }
     let serial = d[2..16].iter().filter(|b| b.is_ascii_graphic()).map(|&b| b as char).collect();
+    let rgb = |at: usize| [d[at], d[at + 1], d[at + 2]];
     Some(ControllerInfo {
         serial,
         vendor_id: u16::from_le_bytes([d[18], d[19]]),
         product_id: u16::from_le_bytes([d[20], d[21]]),
-        body_color: [d[25], d[26], d[27]],
-        button_color: [d[28], d[29], d[30]],
+        body_color: rgb(25),
+        button_color: rgb(28),
+        colors: [rgb(25), rgb(28), rgb(31), rgb(34)],
     })
 }
 
@@ -326,6 +350,21 @@ pub struct InputReport {
     pub gyro: [i16; 3],
 }
 
+/// The optical sensor in a Joy-Con 2's rail. All zero while the mouse feature
+/// is off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MouseSample {
+    /// Running position counters. They wrap; only differences mean anything.
+    pub x: u16,
+    pub y: u16,
+    /// The research notes guess "surface quality": low on something the
+    /// sensor can track.
+    pub roughness: u16,
+    /// The research notes guess "lift-off distance": small and non-zero on a
+    /// surface.
+    pub distance: u16,
+}
+
 fn u16_at(d: &[u8], o: usize) -> u16 {
     u16::from_le_bytes([d[o], d[o + 1]])
 }
@@ -397,6 +436,10 @@ impl InputReport {
             d[0x36 + i * 2..0x38 + i * 2].copy_from_slice(&g.to_le_bytes());
         }
         d
+    }
+
+    pub fn mouse_sample(&self) -> MouseSample {
+        MouseSample { x: self.mouse[0], y: self.mouse[1], roughness: self.mouse[2], distance: self.mouse[3] }
     }
 
     pub fn accel_g(&self) -> [f32; 3] {
@@ -540,6 +583,7 @@ mod tests {
         assert_eq!(cmd_read_memory(0x40, 0x13000), hex("02 91 01 04 00 08 00 00 40 7e 00 00 00 30 01 00"));
         assert_eq!(cmd_set_feature_mask(0x37), hex("0c 91 01 02 00 04 00 00 37 00 00 00"));
         assert_eq!(cmd_enable_features(0x37), hex("0c 91 01 04 00 04 00 00 37 00 00 00"));
+        assert_eq!(cmd_disable_features(FEATURE_MOUSE), hex("0c 91 01 05 00 04 00 00 10 00 00 00"));
         assert_eq!(cmd_set_leds(1), hex("09 91 01 07 00 08 00 00 01 00 00 00 00 00 00 00"));
         assert_eq!(cmd_vibration_sample(3), hex("0a 91 01 02 00 04 00 00 03 00 00 00"));
         assert_eq!(
@@ -547,6 +591,23 @@ mod tests {
             hex("15 91 01 01 00 0e 00 00 00 02 5f 11 85 eb f1 48 5f 11 85 eb f1 48")
         );
         assert_eq!(cmd_pair_finish(), hex("15 91 01 03 00 01 00 00 00"));
+    }
+
+    #[test]
+    fn the_accent_is_the_one_bright_colour_wherever_it_is_stored() {
+        let mut d = vec![0u8; 0x40];
+        d[20..22].copy_from_slice(&PID_JOYCON_R.to_le_bytes());
+        // Charcoal body, black buttons, then a red in the third slot.
+        d[25..37].copy_from_slice(&[0x2d, 0x2f, 0x33, 0x1e, 0x1e, 0x1e, 0xff, 0x5a, 0x4d, 0x30, 0x30, 0x30]);
+        let info = parse_controller_info(&d).unwrap();
+        assert_eq!(info.body_color, [0x2d, 0x2f, 0x33]);
+        assert_eq!(info.accent_color(), [0xff, 0x5a, 0x4d]);
+        // The same red in the last slot is found just the same.
+        d[31..37].copy_from_slice(&[0x30, 0x30, 0x30, 0xff, 0x5a, 0x4d]);
+        assert_eq!(parse_controller_info(&d).unwrap().accent_color(), [0xff, 0x5a, 0x4d]);
+        // A controller that is grey all over has no accent: use its buttons.
+        d[31..37].copy_from_slice(&[0x30; 6]);
+        assert_eq!(parse_controller_info(&d).unwrap().accent_color(), [0x1e, 0x1e, 0x1e]);
     }
 
     #[test]

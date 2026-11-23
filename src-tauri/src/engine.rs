@@ -4,6 +4,13 @@
 //! The engine does no I/O. It is handed samples and a callback, so the live
 //! controller, dev mode's mouse, the replay tool and the tests all run the
 //! same code.
+//!
+//! One controller, two jobs. In the air it is a wand: hold the trigger and
+//! draw. Laid on its side with the rail's optical sensor on a surface it is a
+//! mouse, and the same buttons click. What a button press means is decided
+//! when it goes down and holds until it comes up, so lifting the controller
+//! mid-drag does not drop the drag and setting it down mid-stroke does not
+//! turn the stroke into a click.
 
 use crate::config::Config;
 use crate::fusion::{Fusion, MagCal, MagCalProgress, MagCalibrator, SampleClock};
@@ -57,6 +64,39 @@ pub enum StrokeResult {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum MouseButton {
+    Left,
+    Right,
+    Middle,
+}
+
+/// What the cursor should do. The engine only says so; the app tells Windows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PointerEvent {
+    /// Pixels before Windows applies its own pointer speed. +x right, +y down.
+    Move { dx: f32, dy: f32 },
+    Button { button: MouseButton, down: bool },
+    /// Wheel notches. Positive is the wheel rolled away from the hand.
+    Scroll { notches: f32 },
+}
+
+/// The optical sensor as the engine reads it, for the Device page and the log.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
+pub struct Surface {
+    /// The buttons are mouse buttons right now.
+    pub active: bool,
+    /// The cursor is following the sensor right now.
+    pub tracking: bool,
+    /// The sensor alone says there is a surface, whichever way the rail faces.
+    pub seen: bool,
+    pub distance: u16,
+    pub roughness: u16,
+    /// How far the rail is from facing straight down or up, in degrees.
+    pub tilt_deg: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rumble {
     Match,
     NoMatch,
@@ -91,6 +131,9 @@ pub enum EngineEvent {
     Fire { gesture_id: String, action: Action, label: String },
     Rumble(Rumble),
     Recorded { points: Vec<Pt> },
+    Pointer { event: PointerEvent, source: Source },
+    /// The controller was set down on a surface, or picked up.
+    Surface(Surface),
     Outcome(Outcome),
     Recentered,
     GyroCalibrated(Result<[f32; 3], String>),
@@ -104,6 +147,98 @@ pub struct Pose {
     pub mag_in_use: bool,
     pub report_hz: f32,
     pub gyro_bias_dps: [f32; 3],
+    pub surface: Surface,
+}
+
+/// The largest jump between two reports that can be real travel. The position
+/// counters are 16 bits wide; a step this big means one of them was reset.
+const MOUSE_MAX_STEP: f32 = 8000.0;
+/// Stick counts from centre to the end of its travel, roughly. The sticks are
+/// 12-bit and uncalibrated.
+const STICK_TRAVEL: f32 = 1500.0;
+/// A stick that sits within this many counts for `STICK_REST_MS`, near the
+/// middle of its range, is at rest, and that reading is its centre.
+const STICK_STILL: f32 = 40.0;
+const STICK_REST_MS: f32 = 400.0;
+const STICK_CENTRE_BAND: f32 = 300.0;
+
+/// Learns where a stick rests. Centres differ from stick to stick by more
+/// than a sensible dead zone (this one rests at 1915 of 4095), so the centre
+/// is measured, not assumed.
+#[derive(Clone, Copy, Debug)]
+struct StickRest {
+    centre: f32,
+    anchor: f32,
+    still_ms: f32,
+}
+
+impl StickRest {
+    const NEW: StickRest = StickRest { centre: 2048.0, anchor: 2048.0, still_ms: 0.0 };
+
+    /// Feed one reading; get the deflection from rest, -1 to 1.
+    fn update(&mut self, raw: u16, dt_ms: f32) -> f32 {
+        let v = raw as f32;
+        if (v - self.anchor).abs() > STICK_STILL {
+            self.anchor = v;
+            self.still_ms = 0.0;
+        } else {
+            self.still_ms += dt_ms;
+        }
+        if self.still_ms >= STICK_REST_MS && (v - 2048.0).abs() < STICK_CENTRE_BAND {
+            self.centre = self.anchor;
+        }
+        ((v - self.centre) / STICK_TRAVEL).clamp(-1.0, 1.0)
+    }
+}
+
+struct MouseState {
+    /// Button masks from the config, made disjoint (left wins, then right).
+    left: u32,
+    right: u32,
+    middle: u32,
+    /// Low-passed accelerometer: which way is down, in the controller's axes.
+    gravity: Option<Vec3>,
+    /// How long the surface test has passed without a break.
+    ok_ms: f32,
+    /// How long the sensor has seen a surface that the tilt test turned down.
+    covered_ms: f32,
+    /// Sensor position at the previous report, while tracking.
+    last: Option<(u16, u16)>,
+    tracking: bool,
+    active: bool,
+    last_tracking_ms: f64,
+    prev_buttons: u32,
+    /// Held buttons that went down as mouse buttons.
+    owned: u32,
+    sticks: [StickRest; 2],
+    source: Source,
+    view: Surface,
+}
+
+impl MouseState {
+    fn new() -> MouseState {
+        MouseState {
+            left: 0,
+            right: 0,
+            middle: 0,
+            gravity: None,
+            ok_ms: 0.0,
+            covered_ms: 0.0,
+            last: None,
+            tracking: false,
+            active: false,
+            last_tracking_ms: 0.0,
+            prev_buttons: 0,
+            owned: 0,
+            sticks: [StickRest::NEW; 2],
+            source: Source::Joycon,
+            view: Surface::default(),
+        }
+    }
+
+    fn buttons(&self) -> [(u32, MouseButton); 3] {
+        [(self.left, MouseButton::Left), (self.right, MouseButton::Right), (self.middle, MouseButton::Middle)]
+    }
 }
 
 struct Active {
@@ -147,6 +282,9 @@ pub struct Engine {
     trigger_mask: u32,
     recenter_mask: u32,
     fwd_axis: Vec3,
+    /// The direction the rail's flat side faces, in the controller's axes.
+    rail_axis: Vec3,
+    mouse: MouseState,
     center: Option<Basis>,
     drift: (f32, f32),
     stroke_basis: Option<Basis>,
@@ -182,6 +320,8 @@ impl Engine {
             trigger_mask: btn::ZR | btn::ZL,
             recenter_mask: 0,
             fwd_axis: Vec3::Y,
+            rail_axis: Vec3::X,
+            mouse: MouseState::new(),
             center: None,
             drift: (0.0, 0.0),
             stroke_basis: None,
@@ -205,6 +345,12 @@ impl Engine {
         // A button cannot both draw and recentre.
         self.recenter_mask = btn::mask(&cfg.pointing.recenter_buttons) & !self.trigger_mask;
         self.fwd_axis = pointing::axis(&cfg.pointing.forward_axis);
+        // The rail is on the controller's side: square to both the tip and
+        // the button face. Which of the two sides does not matter here.
+        self.rail_axis = self.fwd_axis.cross(pointing::axis(&cfg.pointing.up_axis)).normalize_or(Vec3::X);
+        self.mouse.left = btn::mask(&cfg.mouse.left_buttons);
+        self.mouse.right = btn::mask(&cfg.mouse.right_buttons) & !self.mouse.left;
+        self.mouse.middle = btn::mask(&cfg.mouse.middle_buttons) & !(self.mouse.left | self.mouse.right);
         self.fx = OneEuro::new(cfg.pointing.smoothing_min_cutoff_hz, cfg.pointing.smoothing_beta);
         self.fy = self.fx;
         self.fusion.set_cfg(cfg.fusion.clone());
@@ -245,6 +391,7 @@ impl Engine {
     pub fn set_mode(&mut self, mode: Mode) {
         if mode == Mode::Paused {
             self.cancel_stroke();
+            self.release_mouse();
         }
         self.mode = mode;
     }
@@ -258,6 +405,7 @@ impl Engine {
             mag_in_use: self.fusion.mag_in_use(),
             report_hz: self.clock.nominal_hz(),
             gyro_bias_dps: [b.x.to_degrees(), b.y.to_degrees(), b.z.to_degrees()],
+            surface: self.mouse.view,
         }
     }
 
@@ -363,19 +511,22 @@ impl Engine {
             cal.push(m, gyro - self.fusion.bias(), dt);
         }
 
+        // The mouse takes the buttons it is using; the wand sees the rest.
+        let buttons = self.mouse_step(r, dt, source);
+
         // No bias learning while the trigger is down or a calibration is collecting.
-        let trigger_now = r.buttons & self.trigger_mask != 0;
+        let trigger_now = buttons & self.trigger_mask != 0;
         self.fusion.set_hold(trigger_now || self.mag_cal.is_some());
         self.fusion.update(dt, gyro, accel, mag);
 
-        let pressed = r.buttons & !self.prev_buttons;
-        self.prev_buttons = r.buttons;
+        let pressed = buttons & !self.prev_buttons;
+        self.prev_buttons = buttons;
         if pressed & self.recenter_mask != 0 {
             self.recenter();
         }
 
         let f = pointing::forward(self.fusion.orientation(), self.fwd_axis);
-        let trigger = r.buttons & self.trigger_mask != 0;
+        let trigger = buttons & self.trigger_mask != 0;
         let t = self.t_ms;
         let k = self.cfg.pointing.px_per_degree.to_degrees(); // pixels per radian
         let sx = if self.cfg.pointing.invert_x { -1.0 } else { 1.0 };
@@ -403,6 +554,129 @@ impl Engine {
         self.imu_trigger = trigger;
     }
 
+    /// The mouse half of a report. Returns the buttons left for the wand.
+    fn mouse_step(&mut self, r: &InputReport, dt: f32, source: Source) -> u32 {
+        let m = r.mouse_sample();
+        let c = &self.cfg.mouse;
+        let on = c.enabled && self.mode != Mode::Paused;
+        let (sens_x, sens_y) = (
+            c.sensitivity * if c.invert_x { -1.0 } else { 1.0 },
+            c.sensitivity * if c.invert_y { -1.0 } else { 1.0 },
+        );
+        let (max_distance, max_roughness, max_tilt, settle_ms, linger_ms) =
+            (c.max_distance, c.max_roughness, c.max_tilt_deg, c.settle_ms, c.linger_ms as f64);
+        let (scroll_speed, deadzone) = (c.scroll_speed * if c.invert_scroll { -1.0 } else { 1.0 }, c.scroll_deadzone);
+        let t = self.t_ms;
+        let dt_ms = dt * 1000.0;
+        self.mouse.source = source;
+
+        // Which way the rail faces. Flat on a desk it faces straight down; in
+        // a hand it mostly faces sideways, with fingers over the sensor.
+        let accel = Vec3::from(r.accel_g());
+        let gravity = match self.mouse.gravity {
+            Some(g) => g + (accel - g) * (dt / 0.08).clamp(0.0, 1.0),
+            None => accel,
+        };
+        self.mouse.gravity = Some(gravity);
+        let tilt_deg = if gravity.length() > 0.3 {
+            (gravity.dot(self.rail_axis).abs() / gravity.length()).clamp(0.0, 1.0).acos().to_degrees()
+        } else {
+            90.0
+        };
+
+        let seen = on && m.distance != 0 && m.distance < max_distance && m.roughness < max_roughness;
+        let surface = seen && tilt_deg <= max_tilt;
+        self.mouse.ok_ms = if surface { self.mouse.ok_ms + dt_ms } else { 0.0 };
+        let was_tracking = self.mouse.tracking;
+        // Becoming a mouse takes a steady look at the surface. Once it is one,
+        // a lift to reposition picks up again on the first report back down.
+        // A stroke in progress stays a stroke: the cursor waits until it ends.
+        let settled = was_tracking || self.mouse.active || self.mouse.ok_ms >= settle_ms;
+        let tracking = surface && settled && !self.imu_trigger;
+        if tracking {
+            // The first report after a lift only sets the reference, so the
+            // cursor does not jump by however far the controller was carried.
+            if let (true, Some((px, py))) = (was_tracking, self.mouse.last) {
+                let dx = m.x.wrapping_sub(px) as i16 as f32;
+                let dy = m.y.wrapping_sub(py) as i16 as f32;
+                if (dx != 0.0 || dy != 0.0) && dx.abs() < MOUSE_MAX_STEP && dy.abs() < MOUSE_MAX_STEP {
+                    let event = PointerEvent::Move { dx: dx * sens_x, dy: dy * sens_y };
+                    (self.emit)(EngineEvent::Pointer { event, source });
+                }
+            }
+            self.mouse.last = Some((m.x, m.y));
+            self.mouse.last_tracking_ms = t;
+        } else {
+            self.mouse.last = None;
+        }
+        self.mouse.tracking = tracking;
+        let active = on && (tracking || (self.mouse.active && t - self.mouse.last_tracking_ms < linger_ms));
+
+        // A press is a click if the controller is a mouse when it goes down,
+        // and stays one until it comes up.
+        let pressed = r.buttons & !self.mouse.prev_buttons;
+        self.mouse.prev_buttons = r.buttons;
+        let before = self.mouse.owned;
+        let mut owned = if on { before & r.buttons } else { 0 };
+        if active {
+            owned |= pressed & (self.mouse.left | self.mouse.right | self.mouse.middle);
+        }
+        self.mouse.owned = owned;
+        for (mask, button) in self.mouse.buttons() {
+            let (was, now) = (before & mask != 0, owned & mask != 0);
+            if was != now {
+                (self.emit)(EngineEvent::Pointer { event: PointerEvent::Button { button, down: now }, source });
+            }
+        }
+
+        // The stick scrolls. A single Joy-Con reports the stick it lacks as
+        // centred, so adding the two is the same as reading the real one.
+        let push = self.mouse.sticks[0].update(r.left_stick.1, dt_ms) + self.mouse.sticks[1].update(r.right_stick.1, dt_ms);
+        if active && scroll_speed != 0.0 && push.abs() > deadzone {
+            // Squared, so a small push is a slow, fine scroll.
+            let v = ((push.abs() - deadzone) / (1.0 - deadzone)).min(1.0);
+            let notches = v * v * push.signum() * scroll_speed * dt;
+            (self.emit)(EngineEvent::Pointer { event: PointerEvent::Scroll { notches }, source });
+        }
+
+        let view = Surface { active, tracking, seen, distance: m.distance, roughness: m.roughness, tilt_deg };
+        // Something over the sensor for a full second that the tilt test will
+        // not accept is worth one line in the log: either a hand, or a limit
+        // that is wrong for this controller.
+        let covered_before = self.mouse.covered_ms;
+        self.mouse.covered_ms = if seen && !surface && !active && !self.imu_trigger { covered_before + dt_ms } else { 0.0 };
+        let covered = covered_before < 1000.0 && self.mouse.covered_ms >= 1000.0;
+        if active != self.mouse.active || covered {
+            (self.emit)(EngineEvent::Surface(view));
+        }
+        self.mouse.active = active;
+        self.mouse.view = view;
+        r.buttons & !owned
+    }
+
+    /// Let go of every mouse button the controller is holding and stop being
+    /// a mouse: the controller went away, or everything was paused.
+    fn release_mouse(&mut self) {
+        let owned = std::mem::take(&mut self.mouse.owned);
+        let source = self.mouse.source;
+        for (mask, button) in self.mouse.buttons() {
+            if owned & mask != 0 {
+                (self.emit)(EngineEvent::Pointer { event: PointerEvent::Button { button, down: false }, source });
+            }
+        }
+        self.mouse.tracking = false;
+        self.mouse.last = None;
+        self.mouse.ok_ms = 0.0;
+        self.mouse.covered_ms = 0.0;
+        self.mouse.view.tracking = false;
+        self.mouse.view.seen = false;
+        if self.mouse.active {
+            self.mouse.active = false;
+            self.mouse.view.active = false;
+            (self.emit)(EngineEvent::Surface(self.mouse.view));
+        }
+    }
+
     /// Dev mode: the mouse stands in for the wand. `host_s` monotonic seconds.
     pub fn on_pointer(&mut self, host_s: f64, x: f32, y: f32, down: bool) {
         let t = host_s * 1000.0;
@@ -426,6 +700,10 @@ impl Engine {
             self.cancel_stroke();
         }
         if source != Source::Mouse {
+            self.release_mouse();
+            self.mouse.prev_buttons = 0;
+            self.mouse.gravity = None;
+            self.mouse.view = Surface::default();
             self.fusion.reset();
             self.clock = SampleClock::default();
             self.have_report = false;
@@ -621,6 +899,14 @@ mod tests {
                 EngineEvent::Fire { gesture_id, .. } => l.lock().unwrap().push(format!("fire:{gesture_id}")),
                 EngineEvent::Rumble(r) => l.lock().unwrap().push(format!("rumble:{r:?}")),
                 EngineEvent::Recorded { points } => l.lock().unwrap().push(format!("recorded:{}", points.len())),
+                EngineEvent::Pointer { event, .. } => l.lock().unwrap().push(match event {
+                    PointerEvent::Move { dx, dy } => format!("move:{dx:.0},{dy:.0}"),
+                    PointerEvent::Button { button, down } => format!("{button:?}:{}", if down { "down" } else { "up" }),
+                    PointerEvent::Scroll { notches } => format!("scroll:{notches}"),
+                }),
+                EngineEvent::Surface(s) => {
+                    l.lock().unwrap().push(format!("surface:{}", if s.active { "on" } else if s.seen { "covered" } else { "off" }))
+                }
                 EngineEvent::Outcome(o) => l.lock().unwrap().push(format!("outcome:{}", o.kind)),
                 EngineEvent::Recentered => l.lock().unwrap().push("recentered".into()),
                 EngineEvent::GyroCalibrated(r) => l.lock().unwrap().push(format!("gyrocal:{}", r.is_ok())),
@@ -759,5 +1045,296 @@ mod tests {
         let out = coalesce(msgs);
         assert_eq!(out.len(), 4);
         assert!(matches!(&out[1], OverlayMsg::Move { pts, .. } if pts.len() == 6));
+    }
+
+    // ------------------------------------------------------------- the mouse
+
+    /// A right Joy-Con and a desk. Reports arrive every 14.7 ms, as they do
+    /// over Bluetooth.
+    struct Desk {
+        e: Engine,
+        log: Log,
+        overlay: Arc<Mutex<Vec<OverlayMsg>>>,
+        i: u32,
+        sensor: (u16, u16),
+        /// Where this controller's stick rests (the real one rests off-centre).
+        stick: u16,
+    }
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum Place {
+        /// Rail down on the desk: the sensor sees a surface.
+        Desk,
+        /// Lifted a little to reposition: rail still down, no surface.
+        Hover,
+        /// Held like a wand, face up: no surface.
+        Hand,
+    }
+    const DOWN: Place = Place::Desk;
+    const HOVER: Place = Place::Hover;
+    const UP: Place = Place::Hand;
+
+    impl Desk {
+        fn new() -> Desk {
+            Desk::with(Config::default())
+        }
+
+        fn with(cfg: Config) -> Desk {
+            let (mut e, log, overlay) = engine();
+            e.set_config(cfg);
+            Desk { e, log, overlay, i: 0, sensor: (100, 100), stick: 1915 }
+        }
+
+        /// `n` reports from `place`. The sensor's counters advance by `step`
+        /// each report wherever the controller is.
+        fn feed(&mut self, n: usize, place: Place, buttons: u32, step: (i16, i16)) {
+            for _ in 0..n {
+                self.i += 1;
+                self.sensor = (self.sensor.0.wrapping_add(step.0 as u16), self.sensor.1.wrapping_add(step.1 as u16));
+                let r = InputReport {
+                    counter: self.i,
+                    buttons,
+                    left_stick: (2047, 2047),
+                    right_stick: (2050, self.stick),
+                    mouse: if place == DOWN { [self.sensor.0, self.sensor.1, 900, 300] } else { [self.sensor.0, self.sensor.1, 6000, 2500] },
+                    accel: if place == UP { [0, 0, 4096] } else { [4096, 0, 0] },
+                    ..Default::default()
+                };
+                self.e.on_report(&r, self.i as f64 * 0.0147);
+            }
+        }
+
+        /// What happened since the last call.
+        fn take(&mut self) -> Vec<String> {
+            std::mem::take(&mut *self.log.lock().unwrap())
+        }
+
+        fn strokes_started(&self) -> usize {
+            self.overlay.lock().unwrap().iter().filter(|m| matches!(m, OverlayMsg::Down { .. })).count()
+        }
+    }
+
+    #[test]
+    fn set_down_on_a_desk_it_moves_the_cursor() {
+        let mut d = Desk::new();
+        // Still moving while it settles: none of that reaches the cursor.
+        d.feed(4, DOWN, 0, (50, 50));
+        d.feed(10, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["surface:on"]);
+        d.feed(3, DOWN, 0, (10, -4));
+        assert_eq!(d.take(), ["move:10,-4", "move:10,-4", "move:10,-4"]);
+        assert!(d.e.pose().surface.tracking && d.e.pose().surface.active);
+        assert_eq!(d.strokes_started(), 0);
+    }
+
+    #[test]
+    fn sensor_counters_wrap_without_a_jump() {
+        let mut d = Desk::new();
+        d.sensor = (65_530, 6);
+        d.feed(10, DOWN, 0, (0, 0));
+        d.take();
+        d.feed(2, DOWN, 0, (10, -10));
+        assert_eq!(d.take(), ["move:10,-10", "move:10,-10"]);
+        assert_eq!(d.sensor, (14, 65_522));
+    }
+
+    #[test]
+    fn sensitivity_and_mirroring_apply_to_the_cursor() {
+        let mut cfg = Config::default();
+        cfg.mouse.sensitivity = 2.0;
+        cfg.mouse.invert_y = true;
+        let mut d = Desk::with(cfg);
+        d.feed(10, DOWN, 0, (0, 0));
+        d.take();
+        d.feed(1, DOWN, 0, (10, -4));
+        assert_eq!(d.take(), ["move:20,8"]);
+    }
+
+    #[test]
+    fn lifting_to_reposition_does_not_drag_the_cursor_along() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.feed(2, DOWN, 0, (5, 0));
+        d.take();
+        // Carried through the air: whatever the counters do, nothing moves.
+        d.feed(6, HOVER, 0, (300, -200));
+        assert!(d.take().is_empty(), "a short lift is still mouse mode, and silent");
+        // Back down somewhere else. The first report is only the new
+        // reference; the one after it already moves the cursor.
+        d.feed(1, DOWN, 0, (40, 40));
+        assert!(d.take().is_empty());
+        d.feed(1, DOWN, 0, (3, 3));
+        assert_eq!(d.take(), ["move:3,3"]);
+    }
+
+    #[test]
+    fn on_a_desk_r_and_zr_click_and_nothing_is_drawn() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.take();
+        d.feed(3, DOWN, btn::R, (0, 0));
+        d.feed(2, DOWN, 0, (0, 0));
+        d.feed(3, DOWN, btn::ZR, (0, 0));
+        d.feed(2, DOWN, 0, (0, 0));
+        d.feed(2, DOWN, btn::R_STICK, (0, 0));
+        d.feed(2, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["Left:down", "Left:up", "Right:down", "Right:up", "Middle:down", "Middle:up"]);
+        assert_eq!(d.strokes_started(), 0, "ZR on a desk is a right click, not a stroke");
+    }
+
+    #[test]
+    fn in_the_air_the_same_buttons_are_the_wand() {
+        let mut d = Desk::new();
+        d.feed(10, UP, 0, (0, 0));
+        d.feed(4, UP, btn::R, (0, 0));
+        d.feed(4, UP, btn::ZR, (7, 7));
+        d.feed(2, UP, 0, (0, 0));
+        // R does nothing in the air; ZR began a stroke that went nowhere.
+        assert_eq!(d.take(), ["outcome:too_short"]);
+        assert_eq!(d.strokes_started(), 1);
+    }
+
+    #[test]
+    fn a_hand_around_the_rail_is_not_a_desk() {
+        let mut d = Desk::new();
+        // The sensor reports a surface (fingers), but the rail faces sideways.
+        for _ in 0..40 {
+            d.i += 1;
+            d.sensor.0 = d.sensor.0.wrapping_add(9);
+            let r = InputReport {
+                counter: d.i,
+                buttons: if d.i > 20 { btn::ZR } else { 0 },
+                left_stick: (2047, 2047),
+                right_stick: (2050, 1915),
+                mouse: [d.sensor.0, d.sensor.1, 900, 300],
+                accel: [0, 0, 4096],
+                ..Default::default()
+            };
+            d.e.on_report(&r, d.i as f64 * 0.0147);
+        }
+        assert!(d.take().is_empty(), "no cursor movement and no click");
+        assert_eq!(d.strokes_started(), 1, "ZR still draws");
+        let s = d.e.pose().surface;
+        assert!(!s.active && s.seen && s.distance == 300 && s.tilt_deg > 80.0);
+        // Left like that with the trigger up, it is reported once, for the log.
+        for _ in 0..200 {
+            d.i += 1;
+            let r = InputReport { counter: d.i, left_stick: (2047, 2047), right_stick: (2050, 1915), mouse: [0, 0, 900, 300], accel: [0, 0, 4096], ..Default::default() };
+            d.e.on_report(&r, d.i as f64 * 0.0147);
+        }
+        let log = d.take();
+        assert_eq!(log.iter().filter(|l| *l == "surface:covered").count(), 1, "{log:?}");
+    }
+
+    #[test]
+    fn a_drag_survives_a_lift() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.feed(2, DOWN, btn::R, (4, 0));
+        // Within a report the cursor arrives first, then the button goes down.
+        assert_eq!(d.take(), ["surface:on", "move:4,0", "Left:down", "move:4,0"]);
+        // Up in the air for a second with R still held.
+        d.feed(68, UP, btn::R, (20, 20));
+        assert_eq!(d.take(), ["surface:off"]);
+        // Down again, still holding: the drag carries on.
+        d.feed(14, DOWN, btn::R, (0, 0));
+        d.feed(1, DOWN, btn::R, (6, 1));
+        d.feed(1, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["surface:on", "move:6,1", "Left:up"]);
+    }
+
+    #[test]
+    fn buttons_stay_mouse_buttons_for_a_moment_after_a_lift() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.take();
+        // 150 ms after lifting: still a click.
+        d.feed(10, UP, 0, (0, 0));
+        d.feed(2, UP, btn::ZR, (0, 0));
+        d.feed(1, UP, 0, (0, 0));
+        assert_eq!(d.take(), ["Right:down", "Right:up"]);
+        // A second later it is a wand again.
+        d.feed(68, UP, 0, (0, 0));
+        d.feed(4, UP, btn::ZR, (0, 0));
+        d.feed(1, UP, 0, (0, 0));
+        assert_eq!(d.take(), ["surface:off", "outcome:too_short"]);
+        assert_eq!(d.strokes_started(), 1);
+    }
+
+    #[test]
+    fn a_stroke_in_progress_is_not_turned_into_a_mouse() {
+        let mut d = Desk::new();
+        d.feed(10, UP, 0, (0, 0));
+        d.feed(3, UP, btn::ZR, (0, 0));
+        // The controller comes to rest on something with the trigger held.
+        d.feed(20, DOWN, btn::ZR, (9, 9));
+        assert!(d.take().is_empty(), "no cursor movement and no right click during the stroke");
+        d.feed(3, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["outcome:too_short", "surface:on"]);
+    }
+
+    #[test]
+    fn the_stick_scrolls_on_a_desk_only() {
+        let notches = |log: &[String]| -> f32 {
+            log.iter().filter_map(|l| l.strip_prefix("scroll:")).map(|n| n.parse::<f32>().unwrap()).sum()
+        };
+        let mut d = Desk::new();
+        // At rest, off-centre as the real stick is: learned, so no creep.
+        d.feed(40, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["surface:on"]);
+        // Pushed all the way forward for a second.
+        d.stick = 3400;
+        d.feed(68, DOWN, 0, (0, 0));
+        let up = notches(&d.take());
+        assert!((14.0..=18.5).contains(&up), "about scroll_speed notches a second, got {up}");
+        // Pulled a little: slower, and the other way.
+        d.stick = 1915 - 700;
+        d.feed(68, DOWN, 0, (0, 0));
+        let down = notches(&d.take());
+        assert!(down < -0.5 && down > -6.0, "{down}");
+        // In the air the stick is not a wheel.
+        d.stick = 1915;
+        d.feed(68, UP, 0, (0, 0));
+        d.take();
+        d.stick = 3400;
+        d.feed(30, UP, 0, (0, 0));
+        assert_eq!(notches(&d.take()), 0.0);
+    }
+
+    #[test]
+    fn losing_the_controller_lets_go_of_the_button() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.feed(2, DOWN, btn::R | btn::ZR, (0, 0));
+        d.take();
+        d.e.source_lost(Source::Joycon);
+        assert_eq!(d.take(), ["Left:up", "Right:up", "surface:off"]);
+    }
+
+    #[test]
+    fn pausing_stops_the_mouse_too() {
+        let mut d = Desk::new();
+        d.feed(10, DOWN, 0, (0, 0));
+        d.feed(2, DOWN, btn::R, (0, 0));
+        d.take();
+        d.e.set_mode(Mode::Paused);
+        assert_eq!(d.take(), ["Left:up", "surface:off"]);
+        d.feed(20, DOWN, btn::R, (8, 8));
+        d.feed(5, DOWN, btn::ZR, (8, 8));
+        assert!(d.take().is_empty());
+        assert_eq!(d.strokes_started(), 0);
+    }
+
+    #[test]
+    fn turned_off_the_sensor_is_ignored_and_zr_draws_on_a_desk() {
+        let mut cfg = Config::default();
+        cfg.mouse.enabled = false;
+        let mut d = Desk::with(cfg);
+        d.feed(20, DOWN, 0, (10, 10));
+        d.feed(4, DOWN, btn::R, (10, 10));
+        d.feed(4, DOWN, btn::ZR, (10, 10));
+        d.feed(2, DOWN, 0, (0, 0));
+        assert_eq!(d.take(), ["outcome:too_short"]);
+        assert_eq!(d.strokes_started(), 1);
     }
 }

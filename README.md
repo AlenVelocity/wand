@@ -1,6 +1,6 @@
 # Wand
 
-Wand is a Windows app that turns a Nintendo Switch 2 Joy-Con into a wand. Hold ZR, draw a shape in the air, let go, and a key combination, media key, program or command runs. A transparent overlay draws the stroke as you make it and shows which gesture it was taken for.
+Wand is a Windows app that turns a Nintendo Switch 2 Joy-Con into a wand. Hold ZR, draw a shape in the air, let go, and a key combination, media key, program or command runs. A transparent overlay draws the stroke as you make it and shows which gesture it was taken for. Laid on its side on a desk, the same controller is a mouse.
 
 Tauri v2. Rust does Bluetooth, sensor fusion, recognition and actions. TypeScript and WebGL2 draw the overlay and the settings window.
 
@@ -14,8 +14,9 @@ Tested with one right-hand Joy-Con 2 on Windows 11 and a built-in Bluetooth adap
 - Buttons, gyro, accelerometer and magnetometer arriving at about 68 reports a second.
 - The overlay holding 240 fps on a 240 Hz display (median frame 4.2 ms).
 - Recognition of the first eight gestures. In one session of 321 strokes, 283 of the 315 long enough to count matched. The misses include scribbles and shapes that are not in the library.
+- The mouse on a desk. The controller sends optical data alongside the magnetometer, and the cursor and the clicks work. Lying on that desk the sensor read a distance of about 150 and a roughness between 2,100 and 3,900, with the rail 6 to 14 degrees off vertical. Lifted, it read 3,081 and 4,607.
 
-Not tested: the left Joy-Con and the Pro Controller 2, how the rumble feels, magnetometer calibration on hardware, battery percentage against the console, and "Start with Windows". The six gestures in the lower half of the table pass with generated sensor data and take nothing from 370 logged real strokes, but nobody has drawn them with a controller yet.
+Not tested: the left Joy-Con and the Pro Controller 2, how the rumble feels, magnetometer calibration on hardware, battery percentage against the console, and "Start with Windows". The mouse has not been tried on cloth. The roughness limit is 4,000 (`mouse.max_roughness`), which the desk already came close to, so a rougher surface may need it raised. The six gestures in the lower half of the table pass with generated sensor data and take nothing from 370 logged real strokes, but nobody has drawn them with a controller yet.
 
 ## Build and run
 
@@ -60,9 +61,26 @@ Hold ZR (ZL on a left Joy-Con), draw, release. The action runs at once; the anim
 | M | as written | Mute |
 | S | from the top right | Save (Ctrl+S) |
 
-Wand strokes shorter than 10 degrees of travel or slower than 8 degrees a second are ignored, so pressing the trigger does not fire anything.
+Wand strokes shorter than 10 degrees of travel or slower than 8 degrees a second are ignored, so pressing the trigger does not fire anything. Alt+F4 is not sent while only the desktop or the taskbar is in front, where Windows would answer it with the Shut Down dialog.
 
 To add your own, press **Record a gesture**, draw the shape three times and bind it to a key combination, media key, program or command. Click any card to rebind it, turn it off or draw it again in your own hand. The library is `gestures.json` in `%APPDATA%\app.wand.desktop\`.
+
+## Mouse
+
+A Joy-Con 2 has an optical sensor in its rail. Lay the controller on its side with the rail down and it moves the cursor.
+
+| On a surface | Does |
+| --- | --- |
+| R (L on a left Joy-Con) | left click |
+| ZR (ZL) | right click |
+| Stick click | middle click |
+| Stick forward / back | scroll |
+
+Lift it and the same buttons are the wand's again. What a press means is decided when the button goes down and holds until it comes up: a drag survives lifting the controller to reposition it, and a stroke already being drawn is not cut short by setting the controller down.
+
+Wand takes the controller to be on a surface from three readings, all shown live on the Device page: the sensor's distance and roughness values, and whether the rail faces down. The third is there because fingers wrapped around the rail look like a surface to the sensor. The limits are `mouse.max_distance`, `mouse.max_roughness` and `mouse.max_tilt_deg`.
+
+The controller reports about 68 times a second. With **Glide** on (Settings), each report's movement is spread over the next 15 ms, so the cursor moves on every frame of a fast display.
 
 ## Calibration
 
@@ -71,19 +89,21 @@ All on the Device page.
 - **Recentre**: point at the middle of the main monitor and click the stick.
 - **Gyro**: Wand learns the gyro offset whenever the controller lies still. The Calibrate button does the same on demand.
 - **Magnetometer**: optional. Press Calibrate and turn the controller through every direction until the bar fills. It keeps the pointing centre from wandering over minutes. Strokes do not need it.
-- **Sensitivity**: `pointing.px_per_degree`, 42 by default. If strokes run off the screen, lower it. 24 suited wrist-drawn strokes on a 1440p monitor.
+- **Sensitivity**: `pointing.px_per_degree`, 24 by default, which suited wrist-drawn strokes on a 1440p monitor. Lower it if strokes run off the screen, raise it if they come out small.
 
 ## Configuration
 
-Every threshold is in `%APPDATA%\app.wand.desktop\wand.toml`, with a comment on each line. Saving the file reloads it. The ones that matter most are `recognizer.min_score` (0.80), `recognizer.min_margin` (0.04), `pointing.px_per_degree`, `stroke.min_length_deg` and `stroke.min_speed_deg_s`.
+Every threshold is in `%APPDATA%\app.wand.desktop\wand.toml`, with a comment on each line. Saving the file reloads it. The ones that matter most are `recognizer.min_score` (0.80), `recognizer.min_margin` (0.04), `pointing.px_per_degree`, `stroke.min_length_deg` and `stroke.min_speed_deg_s`. The mouse has its own section, `[mouse]`: speed, scrolling, which buttons click, `invert_x` and `invert_y` if the cursor moves against your hand. A file written by an older version gets new sections appended the next time the app starts.
 
 ## Working on it without a controller
 
 - **Dev mode** (tray menu or Settings): hold Right Ctrl and move the mouse. The points go through the same recogniser and overlay.
-- `wand.exe --dry-run` logs actions instead of running them.
+- Dry run, in the tray menu or as `wand.exe --dry-run`, logs actions instead of running them, and keeps the mouse from moving or clicking.
 - Every stroke is appended to `strokes.jsonl` in the data folder. `wandtool strokes <file>` scores a log again with the current code, which is how recogniser changes are checked against real hands. 44 such strokes are a test fixture in `src-tauri/tests/data/`.
 - `wandtool selftest 200` draws every gesture with 200 generated hands and prints hit rates and margins.
-- "Record controller traffic" in Settings writes raw input reports to a `.wandrec` file. `wandtool replay <file>` feeds one back through the whole pipeline.
+- "Record controller traffic" in Settings writes raw input reports to a `.wandrec` file. `wandtool replay <file>` feeds one back through the whole pipeline. A replay never moves the real cursor.
+- `wandtool sensor <file>` prints what the optical sensor read over a recording, split by whether Wand counted it as on a surface. Record the controller on a desk, on a leg and in the hand to see where the limits should sit.
+- `wandtool pointer-check` moves the cursor two pixels and back to confirm Windows accepts injected mouse input.
 
 Run the tool with `cargo run --manifest-path src-tauri/Cargo.toml --bin wandtool -- <command>`.
 
@@ -93,7 +113,8 @@ Run the tool with `cargo run --manifest-path src-tauri/Cargo.toml --bin wandtool
 - `fusion.rs`: a Mahony-style filter. Gravity corrects pitch and roll, magnetic heading corrects yaw only, gyro bias is learned at rest.
 - `pointing.rs`: projects where the tip points onto a plane, so wrist roll does not move the point.
 - `recognizer.rs`: a $1-family template matcher. Lines keep their proportions, other shapes are stretched to a unit box so an oval is still a circle, and tails or hooks around a shape are trimmed for a second try.
-- `engine.rs`, `actions.rs`: strokes in, overlay messages, key presses and rumble out.
+- `engine.rs`, `actions.rs`: strokes in, overlay messages, key presses and rumble out. The engine also decides, report by report, whether the controller is a wand or a mouse.
+- `pointer.rs`: the cursor. Relative moves, clicks and wheel turns through `SendInput`, from a thread that sleeps unless there is movement to hand out.
 - `src/overlay/`: one click-through, always-on-top window per monitor, drawn with WebGL2 into a half-float buffer so glow does not pile up where a stroke crosses itself. Nothing runs while idle.
 
 On the controller tested, the timestamp in the input report does not count microseconds, so sample timing comes from when reports arrive.
@@ -109,7 +130,7 @@ The trail on the page is the overlay code from `src/overlay`, and strokes drawn 
 - Windows only, one controller at a time.
 - The overlay sits above full-screen games too. Some systems turn off variable refresh rate under it; quit Wand from the tray if that happens.
 - About 500 MB in the tray, most of it WebView2 (one web view per monitor).
-- Windows blocks injected keys into windows that run as administrator.
+- Windows blocks injected keys and mouse input into windows that run as administrator.
 
 ## Sources
 

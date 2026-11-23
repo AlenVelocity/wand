@@ -8,6 +8,7 @@ pub mod config;
 pub mod engine;
 pub mod fusion;
 pub mod gestures;
+pub mod pointer;
 pub mod pointing;
 pub mod protocol;
 pub mod recognizer;

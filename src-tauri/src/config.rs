@@ -48,6 +48,27 @@ pub struct PointingCfg {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct MouseCfg {
+    pub enabled: bool,
+    pub sensitivity: f32,
+    pub smoothing_ms: f32,
+    pub invert_x: bool,
+    pub invert_y: bool,
+    pub left_buttons: Vec<String>,
+    pub right_buttons: Vec<String>,
+    pub middle_buttons: Vec<String>,
+    pub scroll_speed: f32,
+    pub scroll_deadzone: f32,
+    pub invert_scroll: bool,
+    pub max_distance: u16,
+    pub max_roughness: u16,
+    pub max_tilt_deg: f32,
+    pub settle_ms: f32,
+    pub linger_ms: f32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct FusionCfg {
     pub use_magnetometer: bool,
     pub accel_gain: f32,
@@ -105,6 +126,7 @@ pub struct Config {
     pub recognizer: RecognizerCfg,
     pub stroke: StrokeCfg,
     pub pointing: PointingCfg,
+    pub mouse: MouseCfg,
     pub fusion: FusionCfg,
     pub overlay: OverlayCfg,
     pub rumble: RumbleCfg,
@@ -123,6 +145,7 @@ fn shipped() -> &'static Config {
             recognizer: RecognizerRaw,
             stroke: StrokeRaw,
             pointing: PointingRaw,
+            mouse: MouseRaw,
             fusion: FusionRaw,
             overlay: OverlayRaw,
             rumble: RumbleRaw,
@@ -134,6 +157,7 @@ fn shipped() -> &'static Config {
             recognizer: s.recognizer.into(),
             stroke: s.stroke.into(),
             pointing: s.pointing.into(),
+            mouse: s.mouse.into(),
             fusion: s.fusion.into(),
             overlay: s.overlay.into(),
             rumble: s.rumble.into(),
@@ -171,6 +195,12 @@ raw!(PointingRaw => PointingCfg {
     up_axis: String, invert_x: bool, invert_y: bool, recenter_buttons: Vec<String>,
     smoothing_min_cutoff_hz: f32, smoothing_beta: f32,
 }, pointing);
+raw!(MouseRaw => MouseCfg {
+    enabled: bool, sensitivity: f32, smoothing_ms: f32, invert_x: bool, invert_y: bool,
+    left_buttons: Vec<String>, right_buttons: Vec<String>, middle_buttons: Vec<String>,
+    scroll_speed: f32, scroll_deadzone: f32, invert_scroll: bool,
+    max_distance: u16, max_roughness: u16, max_tilt_deg: f32, settle_ms: f32, linger_ms: f32,
+}, mouse);
 raw!(FusionRaw => FusionCfg {
     use_magnetometer: bool, accel_gain: f32, accel_gate_g: f32, mag_gain: f32, mag_gate: f32,
     still_gyro_dps: f32, still_accel_g: f32, still_time_ms: f32, bias_time_constant_s: f32,
@@ -205,6 +235,14 @@ impl Config {
         let p = &mut self.pointing;
         p.px_per_degree = p.px_per_degree.clamp(4.0, 400.0);
         p.edge_margin_px = p.edge_margin_px.clamp(0.0, 600.0);
+        let m = &mut self.mouse;
+        m.sensitivity = m.sensitivity.clamp(0.05, 20.0);
+        m.smoothing_ms = m.smoothing_ms.clamp(0.0, 60.0);
+        m.scroll_speed = m.scroll_speed.clamp(0.0, 200.0);
+        m.scroll_deadzone = m.scroll_deadzone.clamp(0.02, 0.9);
+        m.max_tilt_deg = m.max_tilt_deg.clamp(5.0, 180.0);
+        m.settle_ms = m.settle_ms.clamp(0.0, 2000.0);
+        m.linger_ms = m.linger_ms.clamp(0.0, 5000.0);
         let o = &mut self.overlay;
         o.prediction_ms = o.prediction_ms.clamp(0.0, 40.0);
         o.prediction_mouse_ms = o.prediction_mouse_ms.clamp(0.0, 40.0);
@@ -245,6 +283,39 @@ impl Paths {
     }
 }
 
+/// The text of every `[section]` the shipped file has and `text` lacks, with
+/// its comments, ready to append. A file written by an older version gets the
+/// sections added since, so every threshold stays visible in the one file.
+pub fn missing_sections(text: &str) -> String {
+    let Ok(doc) = text.parse::<toml_edit::DocumentMut>() else { return String::new() };
+    let mut out = String::new();
+    let mut current: Option<&str> = None;
+    let mut block = String::new();
+    let flush = |name: Option<&str>, block: &mut String, out: &mut String| {
+        if let Some(name) = name {
+            if doc.get(name).is_none() {
+                out.push('\n');
+                out.push_str(block.trim_end());
+                out.push('\n');
+            }
+        }
+        block.clear();
+    };
+    for line in DEFAULT_TOML.lines() {
+        let header = line.trim().strip_prefix('[').and_then(|l| l.strip_suffix(']'));
+        if let Some(name) = header {
+            flush(current, &mut block, &mut out);
+            current = Some(name);
+        }
+        if current.is_some() {
+            block.push_str(line);
+            block.push('\n');
+        }
+    }
+    flush(current, &mut block, &mut out);
+    out
+}
+
 /// Load `wand.toml`, writing the shipped default first if it does not exist.
 /// A file that fails to parse is left alone and the defaults are used, with
 /// the parse error returned so the UI can show it.
@@ -254,6 +325,12 @@ pub fn load_or_init(path: &Path) -> (Config, Option<String>) {
             let _ = std::fs::create_dir_all(parent);
         }
         let _ = std::fs::write(path, DEFAULT_TOML);
+    }
+    if let Ok(text) = std::fs::read_to_string(path) {
+        let added = missing_sections(&text);
+        if !added.is_empty() {
+            let _ = std::fs::write(path, format!("{}\n{added}", text.trim_end()));
+        }
     }
     match std::fs::read_to_string(path) {
         Ok(text) => match Config::from_toml(&text) {
@@ -306,6 +383,34 @@ mod tests {
         assert_eq!(cfg.recognizer.min_score, 0.9);
         assert_eq!(cfg.recognizer.min_margin, Config::default().recognizer.min_margin);
         assert_eq!(cfg.overlay, Config::default().overlay);
+    }
+
+    #[test]
+    fn older_files_gain_the_sections_added_since() {
+        // A file from before the mouse section existed, with a value changed.
+        let mut old = String::new();
+        let mut skipping = false;
+        for line in DEFAULT_TOML.lines() {
+            if line.starts_with('[') {
+                skipping = line.trim() == "[mouse]";
+            }
+            if !skipping {
+                old.push_str(line);
+                old.push('\n');
+            }
+        }
+        let old = old.replace("min_score = 0.80", "min_score = 0.77");
+        assert!(Config::from_toml(&old).unwrap().mouse.enabled, "a missing section reads as the defaults");
+        let added = missing_sections(&old);
+        assert!(added.contains("[mouse]") && added.contains("# Lay the Joy-Con on its side"));
+        assert!(!added.contains("[recognizer]") && !added.contains("[fusion]"));
+        let merged = format!("{}\n{added}", old.trim_end());
+        let cfg = Config::from_toml(&merged).unwrap();
+        assert_eq!(cfg.recognizer.min_score, 0.77);
+        assert_eq!(cfg.mouse, Config::default().mouse);
+        // Nothing to add the second time, and nothing for a complete file.
+        assert!(missing_sections(&merged).is_empty());
+        assert!(missing_sections(DEFAULT_TOML).is_empty());
     }
 
     #[test]

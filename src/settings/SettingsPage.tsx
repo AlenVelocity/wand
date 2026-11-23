@@ -38,6 +38,7 @@ const KIND_WORDS: Record<string, string> = { match: 'Match', no_match: 'No match
 
 export function SettingsPage({ snap, toast }: { snap: Snapshot; toast(text: string): void }) {
   const cfg = snap.config;
+  const left = snap.status.side === 'left';
   const [recordings, setRecordings] = useState<RecordingInfo[]>([]);
 
   const set = async (section: string, key: string, value: boolean | number | string) => {
@@ -79,8 +80,8 @@ export function SettingsPage({ snap, toast }: { snap: Snapshot; toast(text: stri
         <Setting title="Start with Windows" help="Starts hidden, in the tray.">
           <Switch checked={snap.autostart} label="Start with Windows" onChange={async (v) => (await backend()).setAutostart(v).catch((e) => toast(String(e)))} />
         </Setting>
-        <Setting title="Pause gestures" help="The trigger does nothing until you turn this off. Also in the tray menu.">
-          <Switch checked={snap.mode === 'paused'} label="Pause gestures" onChange={async (v) => void (await backend()).setMode(v ? 'paused' : 'normal')} />
+        <Setting title="Pause" help="No strokes and no mouse until you turn this off. Also in the tray menu.">
+          <Switch checked={snap.mode === 'paused'} label="Pause" onChange={async (v) => void (await backend()).setMode(v ? 'paused' : 'normal')} />
         </Setting>
         <Setting title="Rumble" help="A tick when a gesture matches, a double pulse when it does not.">
           <Switch checked={cfg.rumble.enabled} label="Rumble" onChange={(v) => void set('rumble', 'enabled', v)} />
@@ -107,6 +108,27 @@ export function SettingsPage({ snap, toast }: { snap: Snapshot; toast(text: stri
           </Setting>
           <Setting title="Mirror up and down">
             <Switch checked={cfg.pointing.invert_y} label="Mirror up and down" onChange={(v) => void set('pointing', 'invert_y', v)} />
+          </Setting>
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>Mouse</h2>
+        <div className="settings">
+          <Setting
+            title="Use it as a mouse"
+            help={`Lay the Joy-Con on its side, rail down, on a desk, a leg or the sofa. The sensor in the rail moves the cursor, ${left ? 'L' : 'R'} is left click, ${left ? 'ZL' : 'ZR'} is right click and the stick scrolls. Lift it and it is a wand again.`}
+          >
+            <Switch checked={cfg.mouse.enabled} label="Use it as a mouse" onChange={(v) => void set('mouse', 'enabled', v)} />
+          </Setting>
+          <Setting title="Cursor speed" help="Windows applies its own pointer speed on top of this.">
+            <Range value={cfg.mouse.sensitivity} min={0.3} max={3} step={0.1} unit="×" digits={1} onCommit={(v) => void set('mouse', 'sensitivity', Number(v.toFixed(1)))} />
+          </Setting>
+          <Setting title="Scroll speed" help="Wheel notches a second with the stick pushed all the way. 0 turns stick scrolling off.">
+            <Range value={cfg.mouse.scroll_speed} min={0} max={40} step={1} unit="/s" onCommit={(v) => void set('mouse', 'scroll_speed', v)} />
+          </Setting>
+          <Setting title="Glide" help="The controller reports about 68 times a second. This spreads each report over the frames in between, so the cursor does not hop on a fast display. It adds up to 15 ms of delay.">
+            <Switch checked={cfg.mouse.smoothing_ms > 0} label="Glide" onChange={(v) => void set('mouse', 'smoothing_ms', v ? 15.0 : 0.0)} />
           </Setting>
         </div>
       </section>

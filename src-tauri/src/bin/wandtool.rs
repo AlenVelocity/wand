@@ -4,6 +4,8 @@
 //!   wandtool replay <file>...       run recordings through the pipeline, print outcomes
 //!   wandtool selftest [rounds]      generate many hands per gesture and report scores
 //!   wandtool strokes <file.jsonl>   re-recognise strokes the app logged (strokes.jsonl)
+//!   wandtool sensor <file>          what the optical sensor read over a recording
+//!   wandtool pointer-check          nudge the cursor to see that Windows takes it
 //!
 //! `replay` uses the same parser, fusion, projection and recogniser as the
 //! app; only the overlay and the actions are absent. It reads `wand.toml` and
@@ -163,6 +165,97 @@ fn cmd_strokes(file: &Path, data_dir: Option<&Path>, opts: &[String]) -> anyhow:
     Ok(())
 }
 
+/// What the optical sensor said over a recording, and what the engine made of
+/// it. For setting `mouse.max_distance`, `max_roughness` and `max_tilt_deg`
+/// from a real controller: record it on a desk, on a leg and in the hand.
+fn cmd_sensor(file: &Path, data_dir: Option<&Path>) -> anyhow::Result<()> {
+    use wand_lib::engine::{MouseButton, PointerEvent};
+    let (cfg, lib) = load(data_dir);
+    let rec = Recording::load(file)?;
+    #[derive(Default)]
+    struct Seen {
+        travel: (f32, f32),
+        clicks: [u32; 3],
+        notches: f32,
+        set_down: u32,
+    }
+    let seen: Arc<Mutex<Seen>> = Arc::default();
+    let sink = seen.clone();
+    let mut e = Engine::new(
+        cfg.clone(),
+        lib,
+        Box::new(move |ev| {
+            let mut s = sink.lock().unwrap();
+            match ev {
+                EngineEvent::Pointer { event: PointerEvent::Move { dx, dy }, .. } => s.travel = (s.travel.0 + dx.abs(), s.travel.1 + dy.abs()),
+                EngineEvent::Pointer { event: PointerEvent::Button { button, down: true }, .. } => {
+                    s.clicks[match button {
+                        MouseButton::Left => 0,
+                        MouseButton::Right => 1,
+                        MouseButton::Middle => 2,
+                    }] += 1
+                }
+                EngineEvent::Pointer { event: PointerEvent::Scroll { notches }, .. } => s.notches += notches.abs(),
+                EngineEvent::Surface(surface) if surface.active => s.set_down += 1,
+                _ => {}
+            }
+        }),
+    );
+    e.set_monitors(vec![Monitor { x: 0.0, y: 0.0, w: 2560.0, h: 1440.0, scale: 1.0, primary: true }]);
+
+    // Readings while the engine was tracking, and while it was not.
+    let mut rows: [Vec<[f32; 3]>; 2] = [vec![], vec![]];
+    let mut zero_distance = 0usize;
+    for (us, r) in rec.parsed() {
+        e.on_report_from(&r, us as f64 * 1e-6, Source::Replay);
+        let s = e.pose().surface;
+        if s.distance == 0 {
+            zero_distance += 1;
+        }
+        rows[usize::from(!s.tracking)].push([s.distance as f32, s.roughness as f32, s.tilt_deg]);
+    }
+    let total = rows[0].len() + rows[1].len();
+    println!("{}  [{} reports / {:.1} s]", file.display(), total, rec.duration_s());
+    if zero_distance == total {
+        println!("  the sensor sent nothing: the mouse feature was off when this was recorded");
+        return Ok(());
+    }
+    println!("  limits in use: distance 1..{}, roughness below {}, rail within {:.0} degrees of vertical", cfg.mouse.max_distance, cfg.mouse.max_roughness, cfg.mouse.max_tilt_deg);
+    println!("  {:<13} {:>8}   {:<22} {:<22} {:<18}", "", "reports", "distance", "roughness", "tilt (degrees)");
+    for (name, set) in [("tracking", &rows[0]), ("not tracking", &rows[1])] {
+        let spread = |col: usize| {
+            let mut v: Vec<f32> = set.iter().map(|r| r[col]).collect();
+            v.sort_by(|a, b| a.total_cmp(b));
+            match v.len() {
+                0 => "-".to_string(),
+                n => format!("{:.0} / {:.0} / {:.0}", v[n / 20], v[n / 2], v[n - 1 - n / 20]),
+            }
+        };
+        println!("  {:<13} {:>8}   {:<22} {:<22} {:<18}", name, set.len(), spread(0), spread(1), spread(2));
+    }
+    println!("  (each cell: 5th percentile / median / 95th percentile)");
+    let s = seen.lock().unwrap();
+    println!(
+        "  set down {} times; cursor travel {:.0} x {:.0} px; clicks left {} right {} middle {}; scrolled {:.1} notches",
+        s.set_down, s.travel.0, s.travel.1, s.clicks[0], s.clicks[1], s.clicks[2], s.notches
+    );
+    Ok(())
+}
+
+/// Move the real cursor two pixels right and back, and say whether Windows
+/// took it. The one part of the mouse that tests cannot reach.
+fn cmd_pointer_check() -> bool {
+    let Some((a, b)) = wand_lib::pointer::nudge(2, 0) else {
+        println!("could not read the cursor position");
+        return false;
+    };
+    let back = wand_lib::pointer::nudge(-2, 0);
+    println!("cursor {a:?} -> {b:?} -> {:?}", back.map(|(_, c)| c));
+    let moved = b.0 > a.0 && b.1 == a.1;
+    println!("{}", if moved { "Windows accepts injected mouse movement" } else { "the cursor did not move: a window running as administrator may be in front" });
+    moved
+}
+
 fn cmd_selftest(rounds: usize) -> bool {
     let lib = gestures::defaults();
     let mut ok = true;
@@ -232,9 +325,16 @@ fn main() -> anyhow::Result<()> {
             cmd_strokes(Path::new(&args[1]), data_dir.as_deref(), &args[2..])?;
             true
         }
+        Some("sensor") if args.len() > 1 => {
+            cmd_sensor(Path::new(&args[1]), data_dir.as_deref())?;
+            true
+        }
+        Some("pointer-check") => cmd_pointer_check(),
         _ => {
             eprintln!("usage:\n  wandtool synth <dir>\n  wandtool replay [--data-dir <dir>] <file.wandrec>...\n  wandtool selftest [rounds]
-  wandtool strokes [--data-dir <dir>] <strokes.jsonl> [--window f] [--min-score f] [--px-per-degree f]");
+  wandtool strokes [--data-dir <dir>] <strokes.jsonl> [--window f] [--min-score f] [--px-per-degree f]
+  wandtool sensor [--data-dir <dir>] <file.wandrec>
+  wandtool pointer-check");
             false
         }
     };

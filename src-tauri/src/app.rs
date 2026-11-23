@@ -5,10 +5,11 @@
 use crate::actions::{self, RunOptions};
 use crate::config::{self, Config, Paths};
 use crate::devmouse::{self, DevMouse};
-use crate::engine::{self, Engine, EngineEvent, Mode, Outcome, OverlayMsg, Pose, Rumble, Source};
+use crate::engine::{self, Engine, EngineEvent, Mode, Outcome, OverlayMsg, PointerEvent, Pose, Rumble, Source};
 use crate::fusion::{MagCal, MagCalProgress};
 use crate::gestures::{self, Action, Gesture, Library, RecordingCheck, Rotation};
 use crate::joycon::{self, Control, DeviceStatus, Hooks, LinkState};
+use crate::pointer;
 use crate::pointing::Monitor;
 use crate::protocol::InputReport;
 use crate::recognizer::Pt;
@@ -52,6 +53,7 @@ struct Persisted {
 
 struct TrayItems {
     pause: CheckMenuItem<tauri::Wry>,
+    dry: CheckMenuItem<tauri::Wry>,
     dev: CheckMenuItem<tauri::Wry>,
 }
 
@@ -81,6 +83,7 @@ pub struct AppState {
     tray: Mutex<Option<TrayItems>>,
     force_dry_run: bool,
     actions: mpsc::Sender<(Action, String)>,
+    pointer: mpsc::Sender<pointer::Cmd>,
 }
 
 type State<'a> = tauri::State<'a, Arc<AppState>>;
@@ -217,7 +220,7 @@ fn setup(handle: AppHandle, cli: Cli) -> anyhow::Result<()> {
     // The Joy-Con driver reaches the state through a slot filled in below.
     let slot: Arc<std::sync::OnceLock<Arc<AppState>>> = Arc::default();
     let hooks = {
-        let (a, b, c, d, e) = (slot.clone(), slot.clone(), slot.clone(), slot.clone(), slot.clone());
+        let (a, b, c, d, e, f) = (slot.clone(), slot.clone(), slot.clone(), slot.clone(), slot.clone(), slot.clone());
         Hooks {
             report: Box::new(move |raw, report, t| {
                 if let Some(s) = a.get() {
@@ -241,9 +244,16 @@ fn setup(handle: AppHandle, cli: Cli) -> anyhow::Result<()> {
                 }
             }),
             rumble_cfg: Box::new(move || e.get().map(|s| s.config.read().rumble.clone()).unwrap_or_default()),
+            mouse_enabled: Box::new(move || f.get().is_some_and(|s| s.config.read().mouse.enabled)),
         }
     };
     let joycon = joycon::spawn(hooks, t0);
+    // The cursor thread asks before every move or press whether this is for
+    // real: a dry run and the settings window's demos never touch the mouse.
+    let pointer = {
+        let s = slot.clone();
+        pointer::spawn(cfg.mouse.smoothing_ms, move || s.get().is_some_and(|s| s.pointer_live()))
+    };
 
     let (act_tx, act_rx) = mpsc::channel::<(Action, String)>();
     let state = Arc::new(AppState {
@@ -271,6 +281,7 @@ fn setup(handle: AppHandle, cli: Cli) -> anyhow::Result<()> {
         tray: Mutex::new(None),
         force_dry_run: cli.dry_run,
         actions: act_tx,
+        pointer,
     });
     let _ = slot.set(state.clone());
     handle.manage(state.clone());
@@ -500,10 +511,13 @@ mod native {
 fn build_tray(state: &Arc<AppState>) -> anyhow::Result<()> {
     let h = &state.handle;
     let open = MenuItem::with_id(h, "open", "Open Wand", true, None::<&str>)?;
-    let pause = CheckMenuItem::with_id(h, "pause", "Pause gestures", true, false, None::<&str>)?;
+    let pause = CheckMenuItem::with_id(h, "pause", "Pause Wand", true, false, None::<&str>)?;
+    // Started with --dry-run, it stays a dry run: the switch shows it and is locked.
+    let forced = state.force_dry_run;
+    let dry = CheckMenuItem::with_id(h, "dry", "Dry run (log actions, run nothing)", !forced, forced || state.config.read().dev.dry_run, None::<&str>)?;
     let dev = CheckMenuItem::with_id(h, "dev", "Dev mode (hold key + mouse)", true, state.config.read().dev.enabled, None::<&str>)?;
     let quit = MenuItem::with_id(h, "quit", "Quit Wand", true, None::<&str>)?;
-    let menu = Menu::with_items(h, &[&open, &PredefinedMenuItem::separator(h)?, &pause, &dev, &PredefinedMenuItem::separator(h)?, &quit])?;
+    let menu = Menu::with_items(h, &[&open, &PredefinedMenuItem::separator(h)?, &pause, &dry, &dev, &PredefinedMenuItem::separator(h)?, &quit])?;
     let mut tray = TrayIconBuilder::with_id("wand").tooltip("Wand").menu(&menu).show_menu_on_left_click(false);
     if let Some(icon) = h.default_window_icon() {
         tray = tray.icon(icon.clone());
@@ -514,6 +528,13 @@ fn build_tray(state: &Arc<AppState>) -> anyhow::Result<()> {
         "pause" => {
             let paused = s.engine.lock().mode() != Mode::Paused;
             s.apply_mode(if paused { Mode::Paused } else { Mode::Normal });
+        }
+        "dry" => {
+            let enabled = !s.config.read().dev.dry_run;
+            if let Err(e) = config::set_value(&s.paths.config(), "dev", "dry_run", enabled.into()) {
+                log::warn!("could not save dry run: {e}");
+            }
+            s.reload_config();
         }
         "dev" => {
             let enabled = !s.config.read().dev.enabled;
@@ -531,7 +552,7 @@ fn build_tray(state: &Arc<AppState>) -> anyhow::Result<()> {
         }
     })
     .build(h)?;
-    *state.tray.lock() = Some(TrayItems { pause, dev });
+    *state.tray.lock() = Some(TrayItems { pause, dry, dev });
     Ok(())
 }
 
@@ -551,6 +572,24 @@ fn dispatch(state: Arc<AppState>, rx: mpsc::Receiver<EngineEvent>) {
                 EngineEvent::Rumble(kind) => drop(state.joycon.send(Control::Rumble(kind))),
                 EngineEvent::Overlay(m) => overlay.push(m),
                 EngineEvent::Recorded { points } => drop(state.handle.emit_to("settings", "wand://recorded", points)),
+                EngineEvent::Pointer { event, source } => {
+                    // Only the controller in the hand moves the real cursor;
+                    // a replayed recording never does. A release is always
+                    // passed on: the cursor thread ignores it unless it is
+                    // holding that button.
+                    let release = matches!(event, PointerEvent::Button { down: false, .. });
+                    if source == Source::Joycon || release {
+                        let _ = state.pointer.send(pointer::Cmd::Event(event));
+                    }
+                }
+                EngineEvent::Surface(s) => {
+                    let what = match (s.active, s.seen) {
+                        (true, _) => "on a surface",
+                        (false, true) => "the sensor sees a surface but the rail is not facing down, so it does not count",
+                        (false, false) => "lifted",
+                    };
+                    log::info!("mouse: {what} (distance {}, roughness {}, rail {:.0} degrees off vertical)", s.distance, s.roughness, s.tilt_deg);
+                }
                 EngineEvent::Outcome(o) => {
                     log::info!(
                         "stroke {:?} {}: gesture={:?} score={:.3} runner_up={:.3} closest={:?} len={:.0}px {:.0}ms pts={}",
@@ -669,6 +708,11 @@ impl AppState {
         }
     }
 
+    /// Whether cursor moves and clicks should reach Windows right now.
+    fn pointer_live(&self) -> bool {
+        !(self.force_dry_run || self.demo.load(Ordering::Relaxed) || self.config.read().dev.dry_run)
+    }
+
     fn save_persisted(&self) {
         if let Ok(text) = serde_json::to_string_pretty(&*self.persisted.lock()) {
             let _ = std::fs::write(self.paths.state(), text);
@@ -693,9 +737,14 @@ impl AppState {
             log::warn!("{e}");
         }
         let dev_err = self.dev.configure(cfg.dev.enabled, &cfg.dev.hold_key).err();
+        let _ = self.pointer.send(pointer::Cmd::Smoothing(cfg.mouse.smoothing_ms));
+        if cfg.mouse.enabled != self.config.read().mouse.enabled {
+            let _ = self.joycon.send(Control::Mouse(cfg.mouse.enabled));
+        }
         self.engine.lock().set_config(cfg.clone());
         if let Some(t) = self.tray.lock().as_ref() {
             let _ = t.dev.set_checked(cfg.dev.enabled);
+            let _ = t.dry.set_checked(self.force_dry_run || cfg.dev.dry_run);
         }
         let _ = self.handle.emit("wand://overlay-config", cfg.overlay.clone());
         *self.config.write() = cfg;

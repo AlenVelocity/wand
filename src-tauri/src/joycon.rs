@@ -50,7 +50,11 @@ pub struct DeviceStatus {
     pub charging: bool,
     pub body_color: String,
     pub button_color: String,
+    /// The bright colour of the rail and the stick's ring.
+    pub accent_color: String,
     pub has_magnetometer: bool,
+    /// The optical sensor in the rail is switched on.
+    pub has_mouse: bool,
     pub interval_ms: Option<f32>,
     pub report_hz: f32,
     /// One sentence about the current state or the last failure.
@@ -64,10 +68,14 @@ pub struct Hooks {
     pub connected: Box<dyn Fn(&ControllerInfo) + Send + Sync>,
     pub lost: Box<dyn Fn() + Send + Sync>,
     pub rumble_cfg: Box<dyn Fn() -> RumbleCfg + Send + Sync>,
+    /// Whether to switch the optical sensor on when a controller connects.
+    pub mouse_enabled: Box<dyn Fn() -> bool + Send + Sync>,
 }
 
 pub enum Control {
     Rumble(Rumble),
+    /// Switch the optical sensor on or off on the connected controller.
+    Mouse(bool),
     Disconnect,
     Shutdown,
 }
@@ -351,18 +359,32 @@ async fn run_link(
     }
     let _ = link.request(proto::cmd_set_leds(0x01)).await;
 
-    // Buttons, sticks, IMU, rumble and the magnetometer. Fall back to no
-    // magnetometer if the controller refuses the full set.
+    // Buttons, sticks, IMU and rumble always. The optical sensor (Joy-Con
+    // only) and the magnetometer are asked for on top; if the controller
+    // refuses a set, the next smaller one is tried, mouse before magnetometer
+    // because strokes do not need the magnetometer.
     let base = proto::FEATURE_BUTTONS | proto::FEATURE_STICKS | proto::FEATURE_IMU | proto::FEATURE_RUMBLE;
-    let mut features = base | proto::FEATURE_MAGNETOMETER;
-    let enable = |f: u8| (proto::cmd_set_feature_mask(f), proto::cmd_enable_features(f));
-    let (mask, on) = enable(features);
-    if link.request(mask).await.is_err() || link.request(on).await.is_err() {
-        log::warn!("the controller refused the feature set with the magnetometer; retrying without it");
-        features = base;
-        let (mask, on) = enable(features);
-        link.request(mask).await.context("could not select sensor features")?;
-        link.request(on).await.context("could not enable the motion sensors")?;
+    let has_sensor = matches!(pid, proto::PID_JOYCON_R | proto::PID_JOYCON_L);
+    let want_mouse = has_sensor && (hooks.mouse_enabled)();
+    let mut sets = vec![base | proto::FEATURE_MAGNETOMETER, base];
+    if want_mouse {
+        sets = vec![base | proto::FEATURE_MOUSE | proto::FEATURE_MAGNETOMETER, base | proto::FEATURE_MOUSE, base | proto::FEATURE_MAGNETOMETER, base];
+    }
+    let mut features = 0;
+    for (i, set) in sets.iter().enumerate() {
+        let selected = link.request(proto::cmd_set_feature_mask(*set)).await;
+        let enabled = match selected {
+            Ok(_) => link.request(proto::cmd_enable_features(*set)).await,
+            Err(e) => Err(e),
+        };
+        match enabled {
+            Ok(_) => {
+                features = *set;
+                break;
+            }
+            Err(e) if i + 1 < sets.len() => log::warn!("the controller refused feature set {set:#04x} ({e:#}); trying a smaller one"),
+            Err(e) => return Err(e).context("could not enable the motion sensors"),
+        }
     }
 
     (hooks.connected)(&info);
@@ -380,7 +402,10 @@ async fn run_link(
     status.serial = info.serial.clone();
     status.body_color = hex_color(info.body_color);
     status.button_color = hex_color(info.button_color);
+    status.accent_color = hex_color(info.accent_color());
+    log::info!("colours stored on the controller: {}", info.colors.map(hex_color).join(" "));
     status.has_magnetometer = false;
+    status.has_mouse = features & proto::FEATURE_MOUSE != 0;
     status.interval_ms = p.connection_parameters().await.ok().flatten().map(|c| c.interval_us as f32 / 1000.0);
     status.detail = if pairing { "Paired.".into() } else { "Connected.".into() };
     (hooks.status)(status);
@@ -416,8 +441,9 @@ async fn run_link(
                     next_summary = Instant::now() + Duration::from_secs(if total_reports < 2000 { 3 } else { 60 });
                     let g = report.gyro_rad_s().map(f32::to_degrees);
                     log::info!(
-                        "sensors: accel {:+.2?} g, gyro {:+.1?} dps, mag {:?} uT, {} mV, charge {:#04x}, buttons {:#010x}, t {} us",
-                        report.accel_g(), g, report.mag_ut().map(|m| m.map(|v| v.round())), report.battery_mv, report.charge_state, report.buttons, report.motion_time_us
+                        "sensors: accel {:+.2?} g, gyro {:+.1?} dps, mag {:?} uT, mouse {:?}, sticks {:?} {:?}, {} mV, charge {:#04x}, buttons {:#010x}, t {} us",
+                        report.accel_g(), g, report.mag_ut().map(|m| m.map(|v| v.round())), report.mouse, report.left_stick, report.right_stick,
+                        report.battery_mv, report.charge_state, report.buttons, report.motion_time_us
                     );
                 }
                 if report.battery_mv > 0 {
@@ -447,6 +473,31 @@ async fn run_link(
                     let cfg = (hooks.rumble_cfg)();
                     if let (true, Some(ch)) = (cfg.enabled, rumble.clone()) {
                         tokio::spawn(play(p.clone(), ch, pid, rumble_steps(kind, &cfg), seq.clone()));
+                    }
+                }
+                Some(Control::Mouse(on)) => {
+                    if has_sensor && on != (features & proto::FEATURE_MOUSE != 0) {
+                        let next = if on { features | proto::FEATURE_MOUSE } else { features & !proto::FEATURE_MOUSE };
+                        let result = if on {
+                            match link.request(proto::cmd_set_feature_mask(next)).await {
+                                Ok(_) => link.request(proto::cmd_enable_features(next)).await,
+                                Err(e) => Err(e),
+                            }
+                        } else {
+                            link.request(proto::cmd_disable_features(proto::FEATURE_MOUSE)).await
+                        };
+                        match result {
+                            Ok(_) => {
+                                features = next;
+                                status.has_mouse = on;
+                                (hooks.status)(status);
+                                log::info!("optical sensor switched {}; features {features:#04x}", if on { "on" } else { "off" });
+                            }
+                            // The engine ignores the sensor while the setting is off,
+                            // so a refusal here only costs a little battery.
+                            Err(e) => log::warn!("could not switch the optical sensor {}: {e:#}", if on { "on" } else { "off" }),
+                        }
+                        last_report = tokio::time::Instant::now();
                     }
                 }
                 Some(Control::Disconnect) => return Ok(End::Lost),

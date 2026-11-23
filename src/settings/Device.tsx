@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Pose, Snapshot } from '../shared/types';
+import type { Pose, Snapshot, Surface } from '../shared/types';
 import { backend } from './api';
 import { JoyConView } from './joycon3d';
 
@@ -12,7 +12,7 @@ const STATE_WORDS: Record<string, string> = {
   reconnecting: 'Reconnecting',
 };
 
-function Preview({ snap, live }: { snap: Snapshot; live: boolean }) {
+function Preview({ snap, live, onSurface }: { snap: Snapshot; live: boolean; onSurface(s: Surface): void }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const view = useRef<JoyConView | null>(null);
   const [pose, setPose] = useState<Pose | null>(null);
@@ -34,6 +34,7 @@ function Preview({ snap, live }: { snap: Snapshot; live: boolean }) {
         if (now - lastUi > 250) {
           lastUi = now;
           setPose(p);
+          onSurface(p.surface);
         }
       });
       const un2 = await b.on('wand://recentered', () => v.recenter());
@@ -55,8 +56,8 @@ function Preview({ snap, live }: { snap: Snapshot; live: boolean }) {
   }, []);
 
   useEffect(() => {
-    view.current?.setLook({ body: snap.status.body_color, accent: snap.status.button_color, right: snap.status.side !== 'left' });
-  }, [snap.status.body_color, snap.status.button_color, snap.status.side]);
+    view.current?.setLook({ body: snap.status.body_color, accent: snap.status.accent_color, right: snap.status.side !== 'left' });
+  }, [snap.status.body_color, snap.status.accent_color, snap.status.side]);
 
   return (
     <figure className="device-view" style={{ margin: 0 }}>
@@ -69,6 +70,14 @@ function Preview({ snap, live }: { snap: Snapshot; live: boolean }) {
               <span className="mono" style={{ display: 'block', marginTop: 6 }}>
                 {pose.stationary ? 'at rest' : 'moving'} · yaw held by {pose.mag_in_use ? 'magnetometer' : 'gyro only'}
               </span>
+            )}
+            {pose && snap.status.has_mouse && (
+              <>
+                <span className="mono" style={{ display: 'block' }}>
+                  sensor: distance {pose.surface.distance} · roughness {pose.surface.roughness}
+                </span>
+                <span className="mono" style={{ display: 'block' }}>rail {pose.surface.tilt_deg.toFixed(0)}° off vertical</span>
+              </>
             )}
           </>
         ) : (
@@ -83,6 +92,8 @@ export function Device({ snap, toast }: { snap: Snapshot; toast(text: string): v
   const s = snap.status;
   const connected = s.state === 'connected';
   const [gyroBusy, setGyroBusy] = useState(false);
+  const [surface, setSurface] = useState<Surface | null>(null);
+  const mouseWord = !snap.config.mouse.enabled || !s.has_mouse ? 'off' : snap.mode === 'paused' ? 'paused' : !surface ? '--' : surface.active ? 'on a surface' : surface.seen ? 'covered' : 'in the air';
   const [mag, setMag] = useState<{ coverage: number } | null>(null);
 
   const act = async (action: string, done?: string) => {
@@ -143,7 +154,7 @@ export function Device({ snap, toast }: { snap: Snapshot; toast(text: string): v
           <h2 style={{ marginTop: 4 }}>
             {connected ? (
               <>
-                {s.body_color && <i className="swatch" style={{ background: s.body_color }} />}
+                {s.accent_color && <i className="swatch" style={{ background: s.accent_color }} />}
                 {s.name}
               </>
             ) : (
@@ -184,6 +195,10 @@ export function Device({ snap, toast }: { snap: Snapshot; toast(text: string): v
                 <div className="fact">
                   <span>Magnetometer</span>
                   <b>{!s.has_magnetometer ? 'no data' : snap.calibration.mag_valid ? 'calibrated' : 'not calibrated'}</b>
+                </div>
+                <div className="fact">
+                  <span>Mouse</span>
+                  <b>{mouseWord}</b>
                 </div>
               </div>
 
@@ -329,7 +344,7 @@ export function Device({ snap, toast }: { snap: Snapshot; toast(text: string): v
           )}
         </div>
 
-        <Preview snap={snap} live={connected || snap.replaying} />
+        <Preview snap={snap} live={connected || snap.replaying} onSurface={setSurface} />
       </div>
     </>
   );
