@@ -16,6 +16,21 @@ const $ = <T extends Element>(selector: string) => document.querySelector(select
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const coarse = matchMedia('(pointer: coarse)').matches;
 
+// --------------------------------------------------------------- downloads
+
+// The visitor's own system gets the bright button and goes first. Without
+// the script, or anywhere but a Mac, Windows leads. (An iPad also says
+// Macintosh, but has a touch screen.)
+if (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints < 2) {
+  for (const mac of document.querySelectorAll<HTMLAnchorElement>('a[data-os="mac"]')) {
+    const win = mac.parentElement?.querySelector<HTMLAnchorElement>('a[data-os="windows"]');
+    if (!win) continue;
+    win.before(mac);
+    mac.classList.remove('quiet');
+    win.classList.add('quiet');
+  }
+}
+
 // ------------------------------------------------------------ gesture list
 
 const SVG = 'http://www.w3.org/2000/svg';

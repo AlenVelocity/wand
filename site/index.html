@@ -6,13 +6,13 @@
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#000000" />
     <title>Wand: draw in the air with a Joy-Con</title>
-    <meta name="description" content="Wand turns a Switch 2 Joy-Con into a wand for Windows. Hold ZR, draw a shape in the air, and a shortcut, media key or program runs. On a desk, it is a mouse." />
+    <meta name="description" content="Wand turns a Switch 2 Joy-Con into a wand for Windows and Mac. Hold ZR, draw a shape in the air, and a shortcut, media key or program runs. On a desk, it is a mouse." />
     <link rel="canonical" href="https://wand.alen.is/" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://wand.alen.is/" />
     <meta property="og:title" content="Wand: draw in the air with a Joy-Con" />
-    <meta property="og:description" content="Hold ZR on a Switch 2 Joy-Con, draw a shape in the air, and your Windows PC runs a shortcut. On a desk, it is a mouse." />
+    <meta property="og:description" content="Hold ZR on a Switch 2 Joy-Con, draw a shape in the air, and your PC or Mac runs a shortcut. On a desk, it is a mouse." />
     <meta property="og:image" content="https://wand.alen.is/og.png?v=2" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
@@ -35,12 +35,13 @@
         <div class="hero-copy">
           <h1>Draw in the air<br />with a <span>Joy-Con.</span></h1>
           <p class="lede">
-            Wand turns a Switch 2 Joy-Con into a wand for your Windows PC. Hold ZR, draw a shape, let go. A circle takes a screenshot, a flick skips the track,
+            Wand turns a Switch 2 Joy-Con into a wand for your PC or Mac. Hold ZR, draw a shape, let go. A circle takes a screenshot, a flick skips the track,
             a Z undoes. Lay it on the desk and it is a mouse.
           </p>
           <div class="cta">
-            <a class="button" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download for Windows</a>
-            <span class="meta">__VERSION__ · 3.2 MB · Windows 11</span>
+            <a class="button" data-os="windows" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download for Windows</a>
+            <a class="button quiet" data-os="mac" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___universal.dmg">Download for Mac</a>
+            <span class="meta">__VERSION__ · Windows 11 · macOS 11 and later</span>
           </div>
         </div>
 
@@ -105,18 +106,18 @@
         <dl>
           <div>
             <dt>Link</dt>
-            <dd>Bluetooth LE, using the Joy-Con 2's own pairing. No dongle, and nothing to pair in Windows.</dd>
+            <dd>Bluetooth LE, using the Joy-Con 2's own pairing. No dongle, and nothing to pair in the system's Bluetooth settings.</dd>
           </div>
           <div>
             <dt>Motion</dt>
-            <dd>Gyro, accelerometer and magnetometer, fused into one orientation about 68 times a second.</dd>
+            <dd>Gyro, accelerometer and magnetometer, fused into one orientation about 68 times a second on Windows and 33 on a Mac, which gives the controller a slower link.</dd>
           </div>
           <div>
             <dt>Mouse</dt>
             <dd>
               The optical sensor in the rail. The controller counts as set down when the sensor sees a surface close by and the rail faces the floor, so a
-              hand wrapped around it does not move the cursor. Each report's movement is spread over the next 15 ms, so the cursor moves on every frame of a
-              fast display.
+              hand wrapped around it does not move the cursor. Each report's movement is spread out until the next one arrives, so the cursor moves on every
+              frame of a fast display.
             </dd>
           </div>
           <div>
@@ -145,12 +146,16 @@
         <h2>Set it up</h2>
         <ol>
           <li>
-            <h3>Run the installer</h3>
-            <p>It is not code-signed, so Windows SmartScreen will stop it. Choose More info, then Run anyway.</p>
+            <h3>Install it</h3>
+            <p>
+              On Windows, run the installer. It is not code-signed, so SmartScreen will stop it: choose More info, then Run anyway. On a Mac, drag Wand
+              to Applications and open it. It is not notarised, so the first time macOS will refuse: open System Settings, then Privacy &amp; Security, and
+              choose Open Anyway. Allow Bluetooth when asked, and Accessibility, which lets it press keys and move the cursor.
+            </p>
           </li>
           <li>
             <h3>Hold the sync button</h3>
-            <p>The small round one on the Joy-Con's rail, until the lights chase. Do not pair it in Windows settings; Wand does the pairing.</p>
+            <p>The small round one on the Joy-Con's rail, until the lights chase. Do not pair it in your computer's Bluetooth settings; Wand does the pairing.</p>
           </li>
           <li>
             <h3>Hold ZR and draw</h3>
@@ -158,13 +163,15 @@
           </li>
         </ol>
         <div class="needs">
-          <p><b>You need</b> a Switch 2 Joy-Con, Windows 11 and Bluetooth.</p>
+          <p><b>You need</b> a Switch 2 Joy-Con, Bluetooth, and Windows 11 or macOS 11 or later.</p>
           <p>
-            <b>Tested with</b> one right-hand Joy-Con 2. The left one and the Pro Controller 2 are handled in the code and have not been tried. A Joy-Con
-            paired with Wand stops reconnecting to the console until you pair it there again.
+            <b>Tested with</b> one right-hand Joy-Con 2, on Windows 11 and on an Apple silicon MacBook Pro. The left one, the Pro Controller 2 and Intel
+            Macs are handled in the code and have not been tried. A Joy-Con paired with Wand stops reconnecting to the console until you pair it there
+            again.
           </p>
           <p class="links">
-            <a class="button" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Download __VERSION__</a>
+            <a class="button" data-os="windows" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___x64-setup.exe">Windows __VERSION__</a>
+            <a class="button quiet" data-os="mac" href="https://github.com/AlenVelocity/wand/releases/download/v__VERSION__/Wand___VERSION___universal.dmg">Mac __VERSION__</a>
             <a href="https://github.com/AlenVelocity/wand">Source and README</a>
           </p>
         </div>
